@@ -2,8 +2,11 @@
 
 import logging
 import streamlit as st
+import pandas as pd
+
 from financial_report_analyzer.config import load_config, setup_logging
-from financial_report_analyzer.errors import FinancialAnalyzerError
+from financial_report_analyzer.errors import FinancialAnalyzerError, DocumentValidationError, PDFParsingError
+from financial_report_analyzer.pdf_loader import load_pdf
 
 # Initialize logging
 setup_logging()
@@ -45,7 +48,7 @@ st.markdown(
         background-color: #1E293B;
         border: 1px solid #334155;
         border-radius: 8px;
-        padding: 1rem;
+        padding: 1rem 1.25rem;
         margin-bottom: 0.75rem;
     }
     .empty-card {
@@ -56,6 +59,15 @@ st.markdown(
         text-align: center;
         color: #94A3B8;
         margin: 1rem 0;
+    }
+    .warning-card {
+        background-color: rgba(234, 179, 8, 0.1);
+        border: 1px solid rgba(234, 179, 8, 0.3);
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
+        margin-bottom: 0.75rem;
+        font-size: 0.9rem;
+        color: #FDE047;
     }
     .citation-tag {
         background-color: #0F172A;
@@ -78,6 +90,10 @@ def init_session_state() -> None:
         st.session_state.document_id = None
     if "report_metadata" not in st.session_state:
         st.session_state.report_metadata = None
+    if "page_records" not in st.session_state:
+        st.session_state.page_records = None
+    if "ingestion_result" not in st.session_state:
+        st.session_state.ingestion_result = None
     if "report_analysis" not in st.session_state:
         st.session_state.report_analysis = None
     if "chat_history" not in st.session_state:
@@ -93,6 +109,8 @@ def clear_report_session() -> None:
     logger.info("Resetting session state for active user.")
     st.session_state.document_id = None
     st.session_state.report_metadata = None
+    st.session_state.page_records = None
+    st.session_state.ingestion_result = None
     st.session_state.report_analysis = None
     st.session_state.chat_history = []
     st.session_state.is_processing = False
@@ -129,17 +147,60 @@ def main() -> None:
             key="pdf_uploader",
         )
 
+        has_valid_upload = False
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.getvalue()
+            file_size_mb = len(file_bytes) / (1024 * 1024)
+            st.caption(f"📄 **{uploaded_file.name}** ({file_size_mb:.2f} MB)")
+
+            if file_size_mb > config.max_upload_mb:
+                st.error(f"File size exceeds maximum upload limit of {config.max_upload_mb} MB.")
+            elif len(file_bytes) == 0:
+                st.error("Uploaded file is empty (0 bytes).")
+            else:
+                has_valid_upload = True
+
         col_analyze, col_clear = st.columns(2)
         with col_analyze:
-            analyze_clicked = st.button("Analyze Report", type="primary", use_container_width=True)
+            analyze_clicked = st.button(
+                "Analyze Report",
+                type="primary",
+                use_container_width=True,
+                disabled=not has_valid_upload,
+            )
         with col_clear:
             clear_clicked = st.button("Clear Report", on_click=clear_report_session, use_container_width=True)
 
-        if uploaded_file and analyze_clicked:
-            if not config.has_api_key:
-                st.error("Please configure `GEMINI_API_KEY` in environment variables before analyzing.")
-            else:
-                st.info(f"Report uploaded: `{uploaded_file.name}`. Analysis pipeline will be enabled in Phase 2.")
+        if uploaded_file and analyze_clicked and has_valid_upload:
+            st.session_state.is_processing = True
+            with st.spinner("Parsing document and extracting page provenance..."):
+                try:
+                    result = load_pdf(
+                        pdf_bytes=uploaded_file.getvalue(),
+                        filename=uploaded_file.name,
+                        config=config,
+                    )
+                    st.session_state.document_id = result.metadata.document_id
+                    st.session_state.report_metadata = result.metadata
+                    st.session_state.page_records = result.pages
+                    st.session_state.ingestion_result = result
+                    st.session_state.is_processing = False
+
+                    st.success(
+                        f"Parsed {result.metadata.total_pages} pages ({result.total_characters:,} characters)!"
+                    )
+                    if result.has_warnings:
+                        st.warning(
+                            f"{len(result.metadata.warnings)} parsing notice(s) detected. Check 'Sources & Processing' tab."
+                        )
+                except (DocumentValidationError, PDFParsingError) as err:
+                    st.session_state.is_processing = False
+                    logger.error("PDF Ingestion error: %s", str(err))
+                    st.error(f"Validation Error: {err.user_friendly_message}")
+                except Exception as err:
+                    st.session_state.is_processing = False
+                    logger.critical("Unexpected ingestion error: %s", str(err), exc_info=True)
+                    st.error("An unexpected error occurred while processing the PDF.")
 
         st.divider()
         st.subheader("Runtime Configuration")
@@ -183,7 +244,7 @@ def main() -> None:
     # Tab 1: Overview
     with tab_overview:
         st.subheader("Executive Summary & Overview")
-        if not st.session_state.report_analysis:
+        if not st.session_state.report_metadata:
             st.markdown(
                 """
                 <div class="empty-card">
@@ -194,7 +255,20 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
         else:
-            st.info("Executive summary and key takeaways will be displayed here.")
+            meta = st.session_state.report_metadata
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                    <h4>Document Ingested: {meta.filename}</h4>
+                    <p>Total Pages: <strong>{meta.total_pages}</strong> | Meaningful Text Pages: <strong>{meta.meaningful_pages}</strong></p>
+                    <p>Document ID: <code>{meta.document_id}</code></p>
+                    <p>Status: <strong>Text Extracted with 1-based page provenance (Ready for chunking & embeddings in Phase 3)</strong></p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if not st.session_state.report_analysis:
+                st.info("Executive summary and key takeaways generation will be connected in subsequent phases.")
 
     # Tab 2: Ask the Report (RAG Q&A)
     with tab_qa:
@@ -205,14 +279,11 @@ def main() -> None:
         st.markdown("**Suggested Questions:**")
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("What were the main revenue drivers?"):
-                pass
+            st.button("What were the main revenue drivers?", disabled=st.session_state.report_metadata is None)
         with col2:
-            if st.button("How did operating cash flow compare to net income?"):
-                pass
+            st.button("How did operating cash flow compare to net income?", disabled=st.session_state.report_metadata is None)
         with col3:
-            if st.button("What are the primary operational risks?"):
-                pass
+            st.button("What are the primary operational risks?", disabled=st.session_state.report_metadata is None)
 
         if not st.session_state.report_metadata:
             st.markdown(
@@ -228,6 +299,7 @@ def main() -> None:
             user_query = st.chat_input("Ask a question about this financial filing...")
             if user_query:
                 st.write(f"Query: {user_query}")
+                st.info("Retrieval-augmented Q&A pipeline will be connected in Phase 3 & 4.")
 
     # Tab 3: Financial Metrics
     with tab_metrics:
@@ -279,16 +351,54 @@ def main() -> None:
         st.subheader("Processing Diagnostics & Retrieval Provenance")
         st.caption("Inspect parsing metrics, warnings, chunk counts, and retrieval context.")
 
-        st.markdown(
-            """
-            <div class="metric-card">
-                <h5>Document Ingestion Status</h5>
-                <p>Status: <strong>Awaiting Document</strong></p>
-                <p>Pages Extracted: 0 | Meaningful Text Pages: 0 | Chunks Indexed: 0</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        if not st.session_state.report_metadata:
+            st.markdown(
+                """
+                <div class="metric-card">
+                    <h5>Document Ingestion Status</h5>
+                    <p>Status: <strong>Awaiting Document</strong></p>
+                    <p>Pages Extracted: 0 | Meaningful Text Pages: 0 | Total Characters: 0</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            meta = st.session_state.report_metadata
+            ingestion = st.session_state.ingestion_result
+            total_chars = ingestion.total_characters if ingestion else 0
+
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                    <h5>Document Provenance & Extraction Statistics</h5>
+                    <p>Filename: <strong>{meta.filename}</strong> | Size: <strong>{meta.file_size_bytes / 1024:.1f} KB</strong></p>
+                    <p>Total Pages: <strong>{meta.total_pages}</strong> | Meaningful Pages: <strong>{meta.meaningful_pages}</strong> | Total Extracted Characters: <strong>{total_chars:,}</strong></p>
+                    <p>Document Digest ID: <code>{meta.document_id}</code></p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Display Ingestion Warnings if any
+            if meta.warnings:
+                st.subheader(f"Extraction Notices & Warnings ({len(meta.warnings)})")
+                for w in meta.warnings:
+                    page_label = f"Page {w.page_number}: " if w.page_number is not None else "Document-Level: "
+                    st.warning(f"**[{w.warning_type}]** {page_label}{w.message}")
+
+            # Display Page Breakdown Table
+            if st.session_state.page_records:
+                st.subheader("Page-Level Extraction Breakdown")
+                breakdown_data = [
+                    {
+                        "Page Number": p.page_number,
+                        "Character Count": p.char_count,
+                        "Has Meaningful Text": "✅ Yes" if p.has_meaningful_text else "⚠️ Low / Empty",
+                        "Text Preview": (p.text[:90] + "...") if len(p.text) > 90 else (p.text or "(blank)"),
+                    }
+                    for p in st.session_state.page_records
+                ]
+                st.dataframe(pd.DataFrame(breakdown_data), use_container_width=True, hide_index=True)
 
     # Tab 6: About & Methodology
     with tab_about:
@@ -297,10 +407,10 @@ def main() -> None:
             """
             ### System Design
             The **Financial Report Analyzer** transforms unstructured corporate PDFs into verifiable financial intelligence:
-            - **PDF Extraction**: Page-aware parsing via `PyMuPDF` preserving 1-based page indices.
+            - **PDF Extraction**: Page-aware in-memory parsing via `PyMuPDF` preserving 1-based page indices.
             - **Chunking**: Sentence-boundary-aware chunking (~700–1,000 tokens with 100–150 token overlap).
             - **Vector Index**: Isolated in-memory ephemeral ChromaDB collection per active user session.
-            - **Embeddings**: Google GenAI `text-embedding-004` embedding vectors.
+            - **Embeddings**: Google GenAI `gemini-embedding-2` embedding vectors.
             - **RAG & Citations**: Strict prompt grounding with exact page and quotation verification.
             - **Data Integrity**: Financial metrics retain period, currency, scale, and calculation flags; missing metrics are never represented as zero.
 

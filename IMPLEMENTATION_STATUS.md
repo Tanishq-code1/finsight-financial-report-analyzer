@@ -1,23 +1,37 @@
 # Implementation Status — Financial Report Analyzer
 
 ## Active Phase
-- Current Phase: **Phase 1 Complete (Shell & UI Skeleton)**
-- Next Phase: **Phase 2 (PDF Ingestion and Page Provenance)**
+- Current Phase: **Phase 2 Complete (PDF Ingestion and Page Provenance)**
+- Next Phase: **Phase 3 (Chunking, Embeddings, and Ephemeral Vector Retrieval)**
 
 ## Completed Items
-1. **Repository Setup**: Initialized `financial-report-analyzer` with clean modular structure.
-2. **Environment & Dependencies**: Verified Python 3.13.2 compatibility; installed dependencies (`streamlit`, `pymupdf`, `google-genai`, `chromadb`, `pydantic`, `pandas`, `pytest`).
-3. **Configuration Module**: `src/financial_report_analyzer/config.py` with typed environment variable parsing, safe defaults, and validation.
-4. **Error Hierarchy**: `src/financial_report_analyzer/errors.py` with domain-specific exceptions.
-5. **Data Schemas**: `src/financial_report_analyzer/schemas.py` with Pydantic contracts for `PageRecord`, `ChunkRecord`, `Citation`, `RAGAnswer`, `FinancialMetric`, `RiskItem`, `OutlookItem`, and `ReportAnalysis`.
-6. **Prompt Templates**: Added `prompts/qa_system.txt`, `prompts/summary.txt`, and `prompts/financial_extraction.txt`.
-7. **Streamlit UI Shell**: `app.py` with custom finance styling, 6 navigation tabs, upload controls, API key detection, empty states, and reset handling.
-8. **Testing**: 14 passing unit tests covering configuration, schema validation, and module imports.
+1. **Repository & Architecture**: Modular layout under `financial-report-analyzer`.
+2. **Configuration**: `config.py` updated to use `gemini-embedding-2` as the default embedding model (superseding deprecated `text-embedding-004`).
+3. **Data Schemas**: Pydantic models for `PageRecord`, `ChunkRecord`, `Citation`, `RAGAnswer`, `FinancialMetric`, `RiskItem`, `OutlookItem`, and `ReportAnalysis`.
+4. **PDF Loader**: `src/financial_report_analyzer/pdf_loader.py`:
+   - In-memory stream parsing with PyMuPDF.
+   - Validation for extension, PDF signature (`%PDF-`), file size limits, and page count caps.
+   - Rejection of corrupt, empty, and password-protected PDFs.
+   - Text extraction preserving 1-based page numbers.
+   - Financial text normalization preserving currency symbols (`$`, `€`, `£`, `¥`, `₹`), parenthetical negative values, decimals, tables, and soft-hyphen removal (`\xad` -> `-`).
+   - Diagnostic text density analysis reporting blank pages, sparse pages, and scanned-document warnings.
+   - Deterministic content-based document ID (`doc_<sha256[:12]>`).
+5. **Streamlit Integration**:
+   - PDF upload connected to `load_pdf`.
+   - File size and validation errors surfaced before processing.
+   - Progress spinner during extraction.
+   - Extracted `PageRecord` list and `DocumentMetadata` stored in `st.session_state`.
+   - Extraction warnings and page-by-page table displayed in `Sources & Processing` tab.
+   - `Clear report` button resets all document state cleanly.
+6. **Test Coverage**:
+   - 30 tests in total across `test_config.py`, `test_schemas.py`, `test_pdf_loader.py`, and `test_ui_smoke.py`.
+   - 15 dedicated tests in `test_pdf_loader.py` using synthetic programmatic PDFs.
+   - 100% pass rate.
 
 ## Verification & Checks
 - **Test Command**: `.venv\Scripts\python -m pytest tests -v`
-- **Result**: 14 passed in 1.37s.
-- **App Launch Check**: `python -m py_compile app.py` succeeded; Streamlit version 1.66.1 confirmed.
+- **Result**: 30 passed in 6.10s.
+- **App Launch Check**: `python -m py_compile app.py` succeeded with 0 errors.
 
 ## Next Action
-- Proceed with **Phase 2**: Implement `pdf_loader.py` for PyMuPDF in-memory parsing, page caps, and scan warning detection.
+- Implement **Phase 3**: Section- and sentence-aware chunking (`chunking.py`), Google GenAI embeddings (`embeddings.py`), and session-isolated ephemeral ChromaDB (`vector_store.py`).

@@ -1,7 +1,7 @@
 # Build Progress — Financial Report Analyzer (FinSight)
 
 Last Updated: 2026-10-23
-Current Status: **Phase 0 & Phase 1 Complete**
+Current Status: **Phase 0, Phase 1 & Phase 2 Complete**
 
 ---
 
@@ -14,6 +14,7 @@ Current Status: **Phase 0 & Phase 1 Complete**
 | Executive Summary | 12-page PDF attached | Inspected & reviewed | Architectural principles applied |
 | Starter Code | Expected in ZIP archive | Blueprint documents only | Clean modular structure created from scratch |
 | Project Root | `financial-report-analyzer` | Established within workspace | Configured with virtual environment |
+| Embedding Model | Originally `text-embedding-004` (shut down Jan 2026) | Replaced with active model | Updated to `gemini-embedding-2` |
 
 ---
 
@@ -44,18 +45,24 @@ Current Status: **Phase 0 & Phase 1 Complete**
 - [x] Verify app runs without an API key and displays appropriate warning indicators.
 - [x] Write and verify unit test suite for configuration, schemas, and UI smoke test.
 
-### Phase 2: PDF Ingestion & Page Provenance *(Next Phase)*
-- [ ] Implement `pdf_loader.py` with PyMuPDF for in-memory byte extraction.
-- [ ] Enforce size caps (25 MB) and page limits (250 pages).
-- [ ] Track 1-based page numbers and meaningful text detection.
-- [ ] Implement scan detection warnings.
-- [ ] Write synthetic PDF tests.
+### Phase 2: PDF Ingestion & Page Provenance
+- [x] Implement `src/financial_report_analyzer/pdf_loader.py` with PyMuPDF for in-memory stream extraction.
+- [x] Enforce pre-parse validations: file extension (`.pdf`), PDF signature (`%PDF-`), non-empty payload, and upload size cap (25 MB).
+- [x] Enforce page limits (250 pages) and reject password-protected/encrypted documents.
+- [x] Extract text page-by-page preserving accurate 1-based page indices.
+- [x] Normalize financial text while preserving currency symbols (`$`, `€`, `£`, `¥`, `₹`), table columns, decimal amounts, parenthetical losses, and negative percentages.
+- [x] Normalize soft-hyphen artifacts (`\xad` -> `-`).
+- [x] Detect unextractable, blank, and sparse pages, providing actionable warnings (explaining OCR is needed for scans, not supported in this version).
+- [x] Generate deterministic and safe document digest identifiers (`doc_<sha256[:12]>`).
+- [x] Connect loader to Streamlit upload flow with progress spinners, status cards, and page-level diagnostics table.
+- [x] Update embedding model configuration to `gemini-embedding-2` across `config.py`, `.env.example`, and test suites.
+- [x] Create comprehensive synthetic PDF test suite in `tests/test_pdf_loader.py` (covering 15 test scenarios).
 
-### Phase 3: Chunking, Embeddings & Ephemeral Vector Index *(Upcoming)*
-- [ ] Sentence-aware chunker retaining page numbers and chunk IDs.
-- [ ] Google GenAI SDK integration for `text-embedding-004`.
-- [ ] Ephemeral session-isolated ChromaDB client.
-- [ ] Retrieval diagnostics and cross-session isolation tests.
+### Phase 3: Chunking, Embeddings & Ephemeral Vector Index *(Next Phase)*
+- [ ] Implement section- and sentence-aware chunker retaining 1-based page numbers and chunk IDs.
+- [ ] Integrate Google GenAI SDK for `gemini-embedding-2` vectors.
+- [ ] Implement ephemeral session-isolated ChromaDB client.
+- [ ] Add retrieval diagnostics and cross-session isolation tests.
 
 ### Phase 4: Grounded Q&A & Citation Validation *(Upcoming)*
 - [ ] Strict RAG query pipeline with Gemini Flash model.
@@ -96,28 +103,30 @@ platform win32 -- Python 3.13.2, pytest-9.1.1, pluggy-1.7.0
 rootdir: c:\Users\shubh\Downloads\Project-anti\financial-report-analyzer
 configfile: pyproject.toml
 plugins: anyio-4.15.1, mock-3.17.0
-collected 14 items
+collected 30 items
 
-financial-report-analyzer\tests\test_config.py ....                      [ 28%]
-financial-report-analyzer\tests\test_schemas.py ........                 [ 85%]
-financial-report-analyzer\tests\test_ui_smoke.py ..                      [100%]
+financial-report-analyzer\tests\test_config.py ....                      [ 13%]
+financial-report-analyzer\tests\test_pdf_loader.py ...............       [ 63%]
+financial-report-analyzer\tests\test_schemas.py ........                 [ 90%]
+financial-report-analyzer\tests\test_ui_smoke.py ...                     [100%]
 
-============================= 14 passed in 1.37s ==============================
+============================= 30 passed in 6.10s ==============================
 ```
 
-- **Pass Rate:** 14 passed / 14 total (100%)
+- **Pass Rate:** 30 passed / 30 total (100%)
 - **Static Compilation:** `python -m py_compile app.py` passed with 0 errors.
 - **Dependency Imports:** Verified with Python 3.13.2.
 
 ---
 
 ## 4. Known Issues & Blockers
-- **None at Phase 1.** Python 3.13 binary wheels for PyMuPDF, ChromaDB, and onnxruntime are fully functional.
+- None. Binary PyMuPDF 2.0 wheel performs in-memory extraction on Windows with zero disk writes.
 
 ---
 
 ## 5. Next Steps
-- Implement **Phase 2 (PDF Ingestion & Page Provenance)**:
-  - Create `src/financial_report_analyzer/pdf_loader.py`.
-  - Add synthetic PDF generator fixture for unit tests.
-  - Wire upload handler into Streamlit UI and display page counts/warnings in the diagnostics tab.
+- Proceed with **Phase 3 (Chunking, Embeddings, and Ephemeral Vector Retrieval)**:
+  - Create `src/financial_report_analyzer/chunking.py`.
+  - Create `src/financial_report_analyzer/embeddings.py` using `gemini-embedding-2`.
+  - Create `src/financial_report_analyzer/vector_store.py` using ephemeral ChromaDB client.
+  - Implement cross-session isolation and retrieval unit tests.

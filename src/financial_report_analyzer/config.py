@@ -45,7 +45,7 @@ def load_config() -> AppConfig:
             api_key = None
 
     generation_model = os.getenv("GEMINI_GENERATION_MODEL", "gemini-2.5-flash").strip()
-    embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004").strip()
+    embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2").strip()
 
     try:
         max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "25"))
