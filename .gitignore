@@ -1,0 +1,39 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# ChromaDB persistence & local data
+chroma_db/
+*.chroma
+*.sqlite3
+
+# Uploaded documents & temporary files
+uploads/
+temp/
+temp_extract/
+*.pdf
+!tests/fixtures/*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

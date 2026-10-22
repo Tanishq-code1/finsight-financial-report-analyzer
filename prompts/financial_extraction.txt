@@ -1,0 +1,18 @@
+Extract key financial performance indicators and qualitative disclosures from the provided financial report excerpts into structured JSON.
+
+REQUIRED METRICS IN SCOPE:
+- Revenue / Total Net Sales
+- Operating Income / Operating Profit
+- Net Income
+- Operating Cash Flow
+- Capital Expenditures (Capex)
+- Cash and Cash Equivalents
+- Total Debt / Borrowings
+- Diluted EPS
+
+EXTRACTION RULES:
+1. Preserve exact currency, magnitude scale (thousands, millions, billions), and period labels (e.g. FY2024, FY2023).
+2. Never represent a missing metric as zero. If not stated in the excerpts, mark status as 'not_found' with null value.
+3. Every found metric MUST include the 1-based page number and a concise verbatim quote from the text where it appears.
+4. Qualitative Risks: Extract top disclosed risks with stated mitigations where available. Do not invent severity levels.
+5. Management Outlook: Extract forward-looking statements and guidance, noting the target period.

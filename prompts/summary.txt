@@ -1,0 +1,7 @@
+Analyze the provided financial report excerpts to produce a concise, professional executive overview.
+
+REQUIREMENTS:
+1. Scope: Provide a 150-300 word executive summary highlighting key operational performance, major revenue/profit drivers, capital structure/cash flow condition, primary disclosed risks, and management outlook.
+2. Key Takeaways: Provide 3 to 5 bulleted strategic takeaways.
+3. Provenance: Reference the source page numbers for all material figures and claims.
+4. Boundaries: Do not include external company information or hallucinated metrics. If a key dimension is absent from the provided text, mark it as not disclosed.
