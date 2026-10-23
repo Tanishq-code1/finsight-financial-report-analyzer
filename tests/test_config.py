@@ -2,7 +2,7 @@
 
 import os
 import pytest
-from financial_report_analyzer.config import load_config, setup_logging
+from financial_report_analyzer.config import AppConfig, load_config, setup_logging
 
 
 def test_default_config(monkeypatch: pytest.MonkeyPatch):
@@ -90,3 +90,58 @@ def test_setup_logging():
     """Verify logger setup does not raise exceptions."""
     setup_logging("DEBUG")
     setup_logging("INFO")
+
+
+def test_appconfig_getattr_fallback_for_missing_attributes():
+    """Verify that AppConfig.__getattr__ safely returns defaults for missing attributes."""
+    cfg = AppConfig()
+
+    # Pacing attributes
+    assert cfg.embedding_tpm_limit == 30000
+    assert cfg.embedding_rpm_limit == 60
+    assert cfg.embedding_safety_margin == 0.80
+    assert cfg.embedding_max_retries == 5
+    assert cfg.embedding_initial_backoff_sec == 2.0
+    assert cfg.embedding_max_backoff_sec == 60.0
+    assert cfg.embedding_batch_size == 1
+    assert cfg.embedding_deadline_sec == 120.0
+
+    # Test accessing a non-existent configuration attribute
+    with pytest.raises(AttributeError, match="has no attribute 'non_existent_key'"):
+        _ = cfg.non_existent_key
+
+
+def test_appconfig_safe_diagnostics_and_properties_resilience():
+    """Verify safe_diagnostics, max_upload_bytes, and has_api_key never raise AttributeError."""
+    cfg = AppConfig()
+    diag = cfg.safe_diagnostics
+
+    assert isinstance(diag, dict)
+    assert diag["generation_model"] == "gemini-3.8-flash"
+    assert diag["embedding_model"] == "gemini-embedding-2"
+    assert diag["embedding_dimension"] == 768
+    assert diag["embedding_tpm_limit"] == 30000
+    assert diag["embedding_rpm_limit"] == 60
+    assert diag["embedding_safety_margin"] == 0.80
+    assert diag["api_key_configured"] is False
+    assert cfg.max_upload_bytes == 25 * 1024 * 1024
+    assert cfg.has_api_key is False
+
+
+def test_legacy_or_stripped_config_object_tolerance():
+    """Simulate an older in-memory class definition from Streamlit hot-reload cache."""
+    class StaleAppConfig:
+        gemini_generation_model = "gemini-3.8-flash"
+        gemini_embedding_model = "gemini-embedding-2"
+
+    stale_cfg = StaleAppConfig()
+
+    # Direct getattr calls used across app.py sidebar and diagnostics
+    assert getattr(stale_cfg, "embedding_tpm_limit", 30000) == 30000
+    assert getattr(stale_cfg, "embedding_rpm_limit", 60) == 60
+    assert getattr(stale_cfg, "embedding_safety_margin", 0.80) == 0.80
+    assert getattr(stale_cfg, "max_upload_mb", 25) == 25
+    assert getattr(stale_cfg, "max_pdf_pages", 250) == 250
+    assert getattr(stale_cfg, "session_qa_budget", 25) == 25
+    assert getattr(stale_cfg, "session_analysis_budget", 5) == 5
+    assert getattr(stale_cfg, "has_api_key", False) is False

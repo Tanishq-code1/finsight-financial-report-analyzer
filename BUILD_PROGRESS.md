@@ -195,7 +195,22 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 6. Known Limitations & Operational Boundaries
+## 6. Production Hotfix: Module Reload Cache Invalidation & AppConfig Resiliency (v1.0.3)
+
+- **Issue Addressed:** Streamlit Community Cloud failed upon Git pull with `AttributeError: 'AppConfig' object has no attribute 'embedding_tpm_limit'` and earlier `embedding_safety_margin`.
+- **Root Cause Analysis:** Streamlit hot-reloads `app.py` in an existing long-running Python process. Python's `sys.modules` maintains previously imported module references across runs, preventing `from financial_report_analyzer.config import load_config` from re-evaluating the updated module on disk. Consequently, older in-memory `AppConfig` class definitions lacked the new rate-pacing dataclass fields. Furthermore, direct attribute access in `app.py` failed without fallback.
+- **Three-Layer Defensive Architecture:**
+  1. **Streamlit Module Cache Busting (`app.py`):** Explicitly purges `financial_report_analyzer.*` from `sys.modules` at script launch on every Streamlit rerun, guaranteeing clean imports from disk. Forces `_SRC_DIR` to `sys.path[0]`.
+  2. **`AppConfig.__getattr__` Fallback (`config.py`):** Implemented dynamic attribute fallback on `AppConfig` returning default rate-pacing values (`embedding_tpm_limit=30000`, `embedding_rpm_limit=60`, `embedding_safety_margin=0.80`, etc.) if an attribute is queried on an older or stripped config instance.
+  3. **Defensive UI & Diagnostics Access (`app.py`):** Replaced direct attribute reads in sidebar Runtime Configuration and Tab 6 Safe Runtime Diagnostics with `getattr(config, "...", default)`.
+- **Properties Hardening:** Updated `safe_diagnostics`, `max_upload_bytes`, and `has_api_key` to access fields via `getattr()` with fallback defaults, ensuring diagnostics never crash.
+- **Verification:**
+  - 171 passed, 1 skipped in pytest suite (added regression tests for `__getattr__` fallback, stripped objects, and diagnostics resilience).
+  - 110/110 passed in offline evaluation benchmark with full baseline regression parity.
+
+---
+
+## 7. Known Limitations & Operational Boundaries
 
 1. **Optical Character Recognition (OCR):** Scanned, image-only PDFs without extractable text layers trigger an informative warning. OCR is intentionally not implemented.
 2. **Deterministic Offline Benchmark vs. Live Models:** The offline evaluation uses deterministic fake embeddings and structured mocks for regression testing. It does **not** establish 100% real-world accuracy on novel or non-standard corporate filings.
@@ -204,7 +219,7 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 7. Release Readiness Summary
+## 8. Release Readiness Summary
 - Git branch: `master`
-- Version: `1.0.2`
+- Version: `1.0.3`
 - Deployment status: Ready for push to GitHub and automatic redeployment on Streamlit Community Cloud.

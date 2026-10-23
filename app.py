@@ -6,8 +6,17 @@ from pathlib import Path
 
 # Ensure 'src' directory is in sys.path for direct Streamlit Community Cloud execution
 _SRC_DIR = Path(__file__).resolve().parent / "src"
-if _SRC_DIR.exists() and str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
+if _SRC_DIR.exists():
+    _src_str = str(_SRC_DIR)
+    if _src_str in sys.path:
+        sys.path.remove(_src_str)
+    sys.path.insert(0, _src_str)
+
+# Purge cached financial_report_analyzer modules from sys.modules
+# so Streamlit hot-reloads on Git pull always pick up freshly deployed code.
+for _mod_name in list(sys.modules.keys()):
+    if _mod_name == "financial_report_analyzer" or _mod_name.startswith("financial_report_analyzer."):
+        del sys.modules[_mod_name]
 
 import streamlit as st
 import pandas as pd
@@ -551,18 +560,29 @@ def main() -> None:
 
         st.divider()
         st.subheader("Runtime Configuration")
-        st.caption(f"**Generation Model:** `{config.gemini_generation_model}`")
-        st.caption(f"**Embedding Model:** `{config.gemini_embedding_model}` ({config.embedding_dimension}D)")
-        st.caption(f"**Max Size:** `{config.max_upload_mb} MB` | **Max Pages:** `{config.max_pdf_pages}`")
-        st.caption(f"**Chunk Size:** `{config.chunk_size_tokens} tokens` (overlap {config.chunk_overlap_tokens})")
-        st.caption(f"**Retrieval Top-K:** `{config.retrieval_top_k}`")
+        gen_m = getattr(config, "gemini_generation_model", "gemini-3.8-flash")
+        emb_m = getattr(config, "gemini_embedding_model", "gemini-embedding-2")
+        emb_d = getattr(config, "embedding_dimension", 768)
+        max_mb = getattr(config, "max_upload_mb", 25)
+        max_p = getattr(config, "max_pdf_pages", 250)
+        c_tok = getattr(config, "chunk_size_tokens", 850)
+        c_ovl = getattr(config, "chunk_overlap_tokens", 120)
+        top_k = getattr(config, "retrieval_top_k", 5)
+        qa_b = getattr(config, "session_qa_budget", 25)
+        an_b = getattr(config, "session_analysis_budget", 5)
+
+        st.caption(f"**Generation Model:** `{gen_m}`")
+        st.caption(f"**Embedding Model:** `{emb_m}` ({emb_d}D)")
+        st.caption(f"**Max Size:** `{max_mb} MB` | **Max Pages:** `{max_p}`")
+        st.caption(f"**Chunk Size:** `{c_tok} tokens` (overlap {c_ovl})")
+        st.caption(f"**Retrieval Top-K:** `{top_k}`")
 
         st.divider()
         st.caption("🛡️ **Demo Abuse & Cost Safeguards**")
         st.caption(
-            f"• Session Inquiries: **{st.session_state.qa_count} / {config.session_qa_budget}**\n\n"
-            f"• Financial Analyses: **{st.session_state.analysis_count} / {config.session_analysis_budget}**\n\n"
-            f"• Max Upload Size: **{config.max_upload_mb} MB** ({config.max_pdf_pages} pages max)"
+            f"• Session Inquiries: **{st.session_state.qa_count} / {qa_b}**\n\n"
+            f"• Financial Analyses: **{st.session_state.analysis_count} / {an_b}**\n\n"
+            f"• Max Upload Size: **{max_mb} MB** ({max_p} pages max)"
         )
         st.caption(
             "External Google Gemini API requests are rate- and budget-bounded per active session. "
@@ -1452,14 +1472,27 @@ def main() -> None:
 
         st.subheader("Safe Runtime Diagnostics")
         diag_col1, diag_col2, diag_col3 = st.columns(3)
+        gen_m = getattr(config, "gemini_generation_model", "gemini-3.8-flash")
+        emb_m = getattr(config, "gemini_embedding_model", "gemini-embedding-2")
+        emb_d = getattr(config, "embedding_dimension", 768)
+        max_mb = getattr(config, "max_upload_mb", 25)
+        max_p = getattr(config, "max_pdf_pages", 250)
+        tpm_lim = getattr(config, "embedding_tpm_limit", 30000)
+        safe_margin = getattr(config, "embedding_safety_margin", 0.80)
+        rpm_lim = getattr(config, "embedding_rpm_limit", 60)
+        top_k = getattr(config, "retrieval_top_k", 5)
+        qa_b = getattr(config, "session_qa_budget", 25)
+        an_b = getattr(config, "session_analysis_budget", 5)
+        has_key = getattr(config, "has_api_key", False)
+
         with diag_col1:
             st.markdown(
                 f"""
                 <div class="kpi-metric-box">
                     <div class="kpi-title">Configured Models</div>
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
-                        LLM: <code>{config.gemini_generation_model}</code><br/>
-                        Embeddings: <code>{config.gemini_embedding_model}</code> ({config.embedding_dimension}D)
+                        LLM: <code>{gen_m}</code><br/>
+                        Embeddings: <code>{emb_m}</code> ({emb_d}D)
                     </div>
                 </div>
                 """,
@@ -1471,9 +1504,9 @@ def main() -> None:
                 <div class="kpi-metric-box">
                     <div class="kpi-title">Ingestion & Rate Limits</div>
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
-                        Max Size: <strong>{config.max_upload_mb} MB</strong> ({config.max_pdf_pages} pages)<br/>
-                        Token Pacer: <strong>{config.embedding_tpm_limit:,} TPM</strong> ({int(config.embedding_safety_margin * 100)}% margin)<br/>
-                        Request Rate: <strong>{config.embedding_rpm_limit} RPM</strong> (Top-K: {config.retrieval_top_k})
+                        Max Size: <strong>{max_mb} MB</strong> ({max_p} pages)<br/>
+                        Token Pacer: <strong>{tpm_lim:,} TPM</strong> ({int(safe_margin * 100)}% margin)<br/>
+                        Request Rate: <strong>{rpm_lim} RPM</strong> (Top-K: {top_k})
                     </div>
                 </div>
                 """,
@@ -1485,9 +1518,9 @@ def main() -> None:
                 <div class="kpi-metric-box">
                     <div class="kpi-title">Demo Session Safeguards</div>
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
-                        Q&A Budget: <strong>{st.session_state.qa_count} / {config.session_qa_budget}</strong><br/>
-                        Analysis Budget: <strong>{st.session_state.analysis_count} / {config.session_analysis_budget}</strong><br/>
-                        Credentials: <strong>{'Configured' if config.has_api_key else 'Not Configured'}</strong>
+                        Q&A Budget: <strong>{st.session_state.qa_count} / {qa_b}</strong><br/>
+                        Analysis Budget: <strong>{st.session_state.analysis_count} / {an_b}</strong><br/>
+                        Credentials: <strong>{'Configured' if has_key else 'Not Configured'}</strong>
                     </div>
                 </div>
                 """,

@@ -30,6 +30,31 @@ def _get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
+_DEFAULT_CONFIG_VALUES: Dict[str, Any] = {
+    "gemini_api_key": None,
+    "gemini_generation_model": "gemini-3.8-flash",
+    "gemini_embedding_model": "gemini-embedding-2",
+    "embedding_dimension": 768,
+    "max_upload_mb": 25,
+    "max_pdf_pages": 250,
+    "chunk_size_tokens": 850,
+    "chunk_overlap_tokens": 120,
+    "retrieval_top_k": 5,
+    "min_evidence_threshold": 0.35,
+    "log_level": "INFO",
+    "session_qa_budget": 25,
+    "session_analysis_budget": 5,
+    "embedding_tpm_limit": 30000,
+    "embedding_rpm_limit": 60,
+    "embedding_safety_margin": 0.80,
+    "embedding_max_retries": 5,
+    "embedding_initial_backoff_sec": 2.0,
+    "embedding_max_backoff_sec": 60.0,
+    "embedding_batch_size": 1,
+    "embedding_deadline_sec": 120.0,
+}
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Immutable application configuration container."""
@@ -56,40 +81,52 @@ class AppConfig:
     embedding_batch_size: int = 1
     embedding_deadline_sec: float = 120.0
 
+    def __getattr__(self, name: str) -> Any:
+        """Provide safe fallback default values if an attribute is missing.
+
+        Guards against Streamlit hot-reload module skew, legacy cached instances,
+        or partially initialized AppConfig objects.
+        """
+        if name in _DEFAULT_CONFIG_VALUES:
+            return _DEFAULT_CONFIG_VALUES[name]
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     @property
     def max_upload_bytes(self) -> int:
         """Maximum allowed upload file size in bytes."""
-        return self.max_upload_mb * 1024 * 1024
+        mb = getattr(self, "max_upload_mb", 25)
+        return mb * 1024 * 1024
 
     @property
     def has_api_key(self) -> bool:
         """Check if a non-empty Gemini API key is configured."""
-        return bool(self.gemini_api_key and self.gemini_api_key.strip())
+        val = getattr(self, "gemini_api_key", None)
+        return bool(val and str(val).strip())
 
     @property
     def safe_diagnostics(self) -> Dict[str, Any]:
         """Safe runtime diagnostic summary containing no secrets or local filesystem paths."""
         return {
-            "generation_model": self.gemini_generation_model,
-            "embedding_model": self.gemini_embedding_model,
-            "embedding_dimension": self.embedding_dimension,
-            "max_upload_mb": self.max_upload_mb,
-            "max_pdf_pages": self.max_pdf_pages,
-            "chunk_size_tokens": self.chunk_size_tokens,
-            "chunk_overlap_tokens": self.chunk_overlap_tokens,
-            "retrieval_top_k": self.retrieval_top_k,
-            "min_evidence_threshold": self.min_evidence_threshold,
-            "session_qa_budget": self.session_qa_budget,
-            "session_analysis_budget": self.session_analysis_budget,
-            "embedding_tpm_limit": self.embedding_tpm_limit,
-            "embedding_rpm_limit": self.embedding_rpm_limit,
-            "embedding_safety_margin": self.embedding_safety_margin,
-            "embedding_max_retries": self.embedding_max_retries,
-            "embedding_initial_backoff_sec": self.embedding_initial_backoff_sec,
-            "embedding_max_backoff_sec": self.embedding_max_backoff_sec,
-            "embedding_batch_size": self.embedding_batch_size,
-            "embedding_deadline_sec": self.embedding_deadline_sec,
-            "api_key_configured": self.has_api_key,
+            "generation_model": getattr(self, "gemini_generation_model", "gemini-3.8-flash"),
+            "embedding_model": getattr(self, "gemini_embedding_model", "gemini-embedding-2"),
+            "embedding_dimension": getattr(self, "embedding_dimension", 768),
+            "max_upload_mb": getattr(self, "max_upload_mb", 25),
+            "max_pdf_pages": getattr(self, "max_pdf_pages", 250),
+            "chunk_size_tokens": getattr(self, "chunk_size_tokens", 850),
+            "chunk_overlap_tokens": getattr(self, "chunk_overlap_tokens", 120),
+            "retrieval_top_k": getattr(self, "retrieval_top_k", 5),
+            "min_evidence_threshold": getattr(self, "min_evidence_threshold", 0.35),
+            "session_qa_budget": getattr(self, "session_qa_budget", 25),
+            "session_analysis_budget": getattr(self, "session_analysis_budget", 5),
+            "embedding_tpm_limit": getattr(self, "embedding_tpm_limit", 30000),
+            "embedding_rpm_limit": getattr(self, "embedding_rpm_limit", 60),
+            "embedding_safety_margin": getattr(self, "embedding_safety_margin", 0.80),
+            "embedding_max_retries": getattr(self, "embedding_max_retries", 5),
+            "embedding_initial_backoff_sec": getattr(self, "embedding_initial_backoff_sec", 2.0),
+            "embedding_max_backoff_sec": getattr(self, "embedding_max_backoff_sec", 60.0),
+            "embedding_batch_size": getattr(self, "embedding_batch_size", 1),
+            "embedding_deadline_sec": getattr(self, "embedding_deadline_sec", 120.0),
+            "api_key_configured": getattr(self, "has_api_key", False),
         }
 
 
