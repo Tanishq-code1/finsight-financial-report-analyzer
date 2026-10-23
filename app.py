@@ -12,11 +12,16 @@ from financial_report_analyzer.errors import (
     EmbeddingError,
     VectorStoreError,
     RetrievalError,
+    RAGGenerationError,
+    CitationValidationError,
+    ConfigurationError,
 )
 from financial_report_analyzer.pdf_loader import load_pdf
 from financial_report_analyzer.chunker import chunk_pages, ChunkerConfig
 from financial_report_analyzer.embedding_service import EmbeddingService
 from financial_report_analyzer.indexing_pipeline import run_indexing_pipeline
+from financial_report_analyzer.rag import RAGService
+from financial_report_analyzer.citation_validator import CitationValidator
 
 # Initialize logging
 setup_logging()
@@ -85,6 +90,37 @@ st.markdown(
         border-radius: 4px;
         font-size: 0.8rem;
         font-weight: 600;
+    }
+    .answer-card {
+        background-color: #1E293B;
+        border: 1px solid #3B82F6;
+        border-radius: 8px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+    }
+    .citation-card {
+        background-color: #0F172A;
+        border: 1px solid #334155;
+        border-left: 4px solid #10B981;
+        border-radius: 6px;
+        padding: 0.85rem 1rem;
+        margin-bottom: 0.75rem;
+    }
+    .verified-badge {
+        background-color: rgba(16, 185, 129, 0.15);
+        border: 1px solid #10B981;
+        color: #34D399;
+        padding: 0.15rem 0.45rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .abstention-card {
+        background-color: #1E293B;
+        border-left: 4px solid #F59E0B;
+        border-radius: 6px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
     }
     </style>
     """,
@@ -357,35 +393,20 @@ def main() -> None:
             if not st.session_state.report_analysis:
                 st.info("Executive summary generation will be connected in Phase 4 & 5.")
 
-    # Tab 2: Ask the Report (RAG Q&A & Semantic Retrieval Diagnostics)
+    # Tab 2: Ask the Report (Source-Grounded RAG Q&A & Diagnostic Vector Search)
     with tab_qa:
-        st.subheader("Ask the Report (Retrieval Diagnostics)")
-        st.caption("Phase 3 Semantic Search: test query retrieval against the active document's ephemeral vector store.")
-
-        # Suggested Questions
-        st.markdown("**Suggested Questions:**")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            q1 = st.button("What were the main revenue drivers?", disabled=not st.session_state.is_indexed)
-        with col2:
-            q2 = st.button("How did operating cash flow compare to net income?", disabled=not st.session_state.is_indexed)
-        with col3:
-            q3 = st.button("What are the primary operational risks?", disabled=not st.session_state.is_indexed)
-
-        preset_query = None
-        if q1:
-            preset_query = "What were the main revenue drivers?"
-        elif q2:
-            preset_query = "How did operating cash flow compare to net income?"
-        elif q3:
-            preset_query = "What are the primary operational risks?"
+        st.subheader("Ask the Report (Source-Grounded Q&A)")
+        st.caption(
+            "Ask natural-language questions about the active filing. FinSight answers strictly from retrieved "
+            "evidence with verifiable 1-based page citations and explicit evidence abstention."
+        )
 
         if not st.session_state.report_metadata:
             st.markdown(
                 """
                 <div class="empty-card">
                     <h4>Document Not Yet Loaded</h4>
-                    <p>Upload and process a filing to test semantic similarity search.</p>
+                    <p>Upload and process a public company financial report (PDF) in the sidebar to enable source-grounded question answering.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -395,54 +416,196 @@ def main() -> None:
                 """
                 <div class="empty-card">
                     <h4>Vector Index Not Available</h4>
-                    <p>Document text is extracted, but vector search requires configuring <code>GEMINI_API_KEY</code>.</p>
+                    <p>Document text is extracted, but vector retrieval and grounded Q&A require configuring <code>GEMINI_API_KEY</code>.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
         else:
-            search_input = st.text_input(
-                "Search the filing semantically:",
-                value=preset_query or "",
-                placeholder="e.g., What are the principal capital expenditures?",
-                key="semantic_search_input",
-            )
-            search_btn = st.button("Search Relevant Passages", type="secondary")
+            # Suggested Questions Quick Bar
+            st.markdown("**Suggested Research Questions:**")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                q1 = st.button("📊 Revenue Drivers", use_container_width=True)
+            with col2:
+                q2 = st.button("💵 Cash Flow vs Net Income", use_container_width=True)
+            with col3:
+                q3 = st.button("⚠️ Disclosed Risk Factors", use_container_width=True)
+            with col4:
+                q4 = st.button("🔮 Forward Guidance", use_container_width=True)
 
-            active_query = search_input if search_btn or preset_query else None
-            if active_query:
-                with st.spinner(f"Retrieving top {config.retrieval_top_k} passages..."):
+            preset_question = None
+            if q1:
+                preset_question = "What were the main revenue drivers and growth rates in the latest fiscal period?"
+            elif q2:
+                preset_question = "How did operating cash flow compare to net income, and what were the main drivers of the difference?"
+            elif q3:
+                preset_question = "What are the primary operational, macroeconomic, and regulatory risk factors disclosed?"
+            elif q4:
+                preset_question = "What forward-looking statements or management guidance were provided for upcoming periods?"
+
+            # Input form
+            with st.form(key="rag_qa_form", clear_on_submit=False):
+                user_question = st.text_input(
+                    "Ask a question about this financial report:",
+                    value=preset_question or "",
+                    placeholder="e.g., What were the principal drivers of revenue growth in fiscal year 2024?",
+                    key="rag_question_input",
+                )
+                col_btn1, col_btn2 = st.columns([5, 1])
+                with col_btn1:
+                    submit_qa = st.form_submit_button("Ask Question", type="primary")
+                with col_btn2:
+                    clear_history = st.form_submit_button("Clear History")
+
+            if clear_history:
+                st.session_state.chat_history = []
+                st.rerun()
+
+            active_q = None
+            if submit_qa and user_question.strip():
+                active_q = user_question.strip()
+            elif preset_question:
+                active_q = preset_question
+
+            if active_q:
+                with st.spinner("Analyzing report evidence and generating grounded response..."):
                     try:
                         embedder = EmbeddingService(config=config)
-                        q_vector = embedder.embed_query(active_query)
-                        results = st.session_state.vector_store.query(
-                            query_embedding=q_vector,
+                        rag_service = RAGService(config=config)
+                        answer, retrieved = rag_service.answer_question(
+                            question=active_q,
+                            vector_store=st.session_state.vector_store,
+                            embedding_service=embedder,
+                            document_id=st.session_state.document_id,
                             top_k=config.retrieval_top_k,
+                            min_evidence_threshold=config.min_evidence_threshold,
                         )
-                        st.session_state.search_results = results
-                    except Exception as q_err:
-                        logger.error("Query retrieval error: %s", str(q_err))
-                        st.error(f"Retrieval error: {str(q_err)}")
+                        # Prepend to chat history for chronological reverse display
+                        st.session_state.chat_history.insert(
+                            0,
+                            {
+                                "question": active_q,
+                                "answer": answer,
+                                "retrieved_chunks": retrieved,
+                            },
+                        )
+                    except (ConfigurationError, RetrievalError, RAGGenerationError) as rag_err:
+                        logger.error("RAG error: %s", str(rag_err))
+                        st.error(f"Question Answering Error: {rag_err.user_friendly_message}")
+                    except Exception as exc:
+                        logger.critical("Unexpected error in RAG Q&A: %s", str(exc), exc_info=True)
+                        st.error("An unexpected error occurred while processing your question.")
 
-            if st.session_state.search_results:
-                st.markdown(f"**Retrieved {len(st.session_state.search_results)} candidate passage(s):**")
-                for rank, r in enumerate(st.session_state.search_results, start=1):
-                    st.markdown(
-                        f"""
-                        <div class="retrieval-card">
-                            <span class="citation-tag">Rank #{rank} | Page {r.page_number}</span>
-                            <span style="float: right; font-size: 0.8rem; color: #94A3B8;">
-                                Cosine Distance: <strong>{r.distance}</strong> | Similarity Metric: <strong>{r.similarity}</strong>
-                            </span>
-                            <p style="margin-top: 0.5rem; font-size: 0.92rem; color: #E2E8F0; white-space: pre-wrap;">{r.text}</p>
-                            <small style="color: #64748B;">Chunk ID: <code>{r.chunk_id}</code></small>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                st.caption(
-                    "Note: Cosine distance is bounded [0, 2] (0.0 = identical). Similarity is a vector distance metric, not a probability."
-                )
+            # Render Chat History
+            if st.session_state.chat_history:
+                st.markdown("### Grounded Answers")
+                for idx, entry in enumerate(st.session_state.chat_history):
+                    q = entry["question"]
+                    ans = entry["answer"]
+                    retrieved_chunks = entry["retrieved_chunks"]
+
+                    st.markdown(f"#### ❓ {q}")
+
+                    if ans.insufficient_evidence:
+                        st.markdown(
+                            f"""
+                            <div class="abstention-card">
+                                <h5 style="color: #F59E0B; margin-top: 0;">⚠️ Insufficient Evidence in Report</h5>
+                                <p style="margin-bottom: 0.5rem; font-size: 0.95rem;">{ans.answer}</p>
+                                {f'<small style="color: #D97706;"><strong>Reason:</strong> {ans.abstention_reason}</small>' if ans.abstention_reason else ''}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        if ans.limitations:
+                            for lim in ans.limitations:
+                                st.caption(f"• {lim}")
+                    else:
+                        st.markdown(
+                            f"""
+                            <div class="answer-card">
+                                <p style="font-size: 1.02rem; line-height: 1.6; color: #F8FAFC; margin-bottom: 0; white-space: pre-wrap;">{ans.answer}</p>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                        if ans.limitations:
+                            with st.expander("ℹ️ Data Caveats & Scope Limitations", expanded=False):
+                                for lim in ans.limitations:
+                                    st.markdown(f"- {lim}")
+
+                        # Citations Panel
+                        if ans.citations:
+                            st.markdown(f"**📚 Verifiable Source Citations ({len(ans.citations)}):**")
+                            for cit in ans.citations:
+                                st.markdown(
+                                    f"""
+                                    <div class="citation-card">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                            <span class="citation-tag">📄 Page {cit.page_number}</span>
+                                            <span class="verified-badge">✓ Verified in Report Text</span>
+                                        </div>
+                                        <p style="font-style: italic; color: #E2E8F0; margin: 0.4rem 0; font-size: 0.93rem;">"{cit.quote}"</p>
+                                        <div style="font-size: 0.78rem; color: #64748B;">
+                                            Source: <code>{cit.source_filename or 'Report PDF'}</code> | Chunk ID: <code>{cit.chunk_id}</code>
+                                        </div>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+
+                    # Collapsible diagnostic inspection of retrieved candidate passages
+                    if retrieved_chunks:
+                        with st.expander(f"🔍 Inspect {len(retrieved_chunks)} Retrieved Passages for this Query", expanded=False):
+                            for rank, r in enumerate(retrieved_chunks, start=1):
+                                st.markdown(
+                                    f"""
+                                    <div class="retrieval-card">
+                                        <span class="citation-tag">Rank #{rank} | Page {r.page_number}</span>
+                                        <span style="float: right; font-size: 0.8rem; color: #94A3B8;">
+                                            Distance: <strong>{r.distance}</strong> | Similarity Metric: <strong>{r.similarity}</strong>
+                                        </span>
+                                        <p style="margin-top: 0.5rem; font-size: 0.9rem; color: #E2E8F0; white-space: pre-wrap;">{r.text}</p>
+                                        <small style="color: #64748B;">Chunk ID: <code>{r.chunk_id}</code></small>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+                    st.divider()
+
+            # Standalone Vector Diagnostic Search Tool (Preserving Phase 3 tool)
+            with st.expander("🛠️ Standalone Vector Search Diagnostic Tool (Phase 3)", expanded=False):
+                st.caption("Inspect raw cosine distances and vector similarity matches without LLM generation.")
+                diag_query = st.text_input("Enter diagnostic search phrase:", key="standalone_vector_diag_input")
+                if st.button("Run Diagnostic Search", key="btn_standalone_vector_diag"):
+                    if diag_query.strip():
+                        with st.spinner("Searching vector index..."):
+                            try:
+                                embedder = EmbeddingService(config=config)
+                                q_vec = embedder.embed_query(diag_query.strip())
+                                diag_results = st.session_state.vector_store.query(
+                                    query_embedding=q_vec,
+                                    top_k=config.retrieval_top_k,
+                                )
+                                st.markdown(f"**Found {len(diag_results)} passages:**")
+                                for rank, r in enumerate(diag_results, start=1):
+                                    st.markdown(
+                                        f"""
+                                        <div class="retrieval-card">
+                                            <span class="citation-tag">Rank #{rank} | Page {r.page_number}</span>
+                                            <span style="float: right; font-size: 0.8rem; color: #94A3B8;">
+                                                Cosine Distance: <strong>{r.distance}</strong> | Similarity: <strong>{r.similarity}</strong>
+                                            </span>
+                                            <p style="margin-top: 0.4rem; font-size: 0.9rem; color: #CBD5E1;">{r.text}</p>
+                                            <small style="color: #64748B;">Chunk ID: <code>{r.chunk_id}</code></small>
+                                        </div>
+                                        """,
+                                        unsafe_allow_html=True,
+                                    )
+                            except Exception as diag_err:
+                                st.error(f"Diagnostic retrieval failed: {str(diag_err)}")
 
     # Tab 3: Financial Metrics
     with tab_metrics:

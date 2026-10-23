@@ -1,7 +1,7 @@
 # Build Progress — Financial Report Analyzer (FinSight)
 
 Last Updated: 2026-10-23
-Current Status: **Phase 0, Phase 1, Phase 2 & Phase 3 Complete**
+Current Status: **Phase 0, Phase 1, Phase 2, Phase 3 & Phase 4 Complete**
 
 ---
 
@@ -80,13 +80,36 @@ Current Status: **Phase 0, Phase 1, Phase 2 & Phase 3 Complete**
   - Reset action deletes Chroma collection and clears index state.
 - [x] Build comprehensive unit tests (56 passing, 1 opt-in skipped live smoke test).
 
-### Phase 4: Grounded Q&A & Citation Validation *(Next Phase)*
-- [ ] Strict RAG query pipeline with Gemini Flash model.
-- [ ] Verifiable citation extraction and substring verification.
-- [ ] Abstention on unanswerable/out-of-scope questions.
-- [ ] Prompt injection defense against malicious document text.
+### Phase 4: Grounded Q&A & Citation Validation
+- [x] Configure generation model to `gemini-3.8-flash` in `config.py`, `.env.example`, and test suites.
+- [x] Implement independent citation validator (`citation_validator.py`):
+  - Validates chunk IDs exist in retrieved candidate set.
+  - Verifies cited 1-based page numbers against chunk provenance.
+  - Verifies quote substrings using exact match, normalized punctuation/whitespace, ellipsis matching, and critical number verification (rejects fabricated financial figures).
+  - Provides detailed verification reporting and automatic source metadata enrichment.
+- [x] Refine system prompt (`prompts/qa_system.txt`):
+  - Strict grounding to retrieved passages.
+  - Prompt injection defense: treats document excerpts as untrusted external text.
+  - Explicit instruction to abstain when evidence is missing.
+  - Non-investment advice disclaimer.
+- [x] Implement RAG service (`rag.py`):
+  - Ephemeral vector retrieval via `VectorStore.query`.
+  - Evidence sufficiency check: immediate abstention when no passages found or similarity is below `min_evidence_threshold`.
+  - Boundary-tag formatting (`<excerpt chunk_id="..." page="..." source="...">`) protecting against prompt injection.
+  - Official `google-genai` structured generation with Pydantic `RAGAnswer` schema.
+  - Bounded exponential backoff for transient API errors (HTTP 429, 503).
+  - Integration with `CitationValidator` filtering fabricated citations and recording limitations.
+- [x] Streamlit UI Integration (`app.py`):
+  - Suggested research questions bar for fast exploratory querying.
+  - Interactive Q&A in "Ask the Report" tab with loading spinners.
+  - Prominent grounded answer cards and amber abstention alert boxes.
+  - Collapsible citation cards with page badges, quoted excerpts, and verification badges.
+  - Collapsible retrieved candidate passages inspector.
+  - Session chat history with clear history option and clean document reset.
+  - Standalone Phase 3 vector search diagnostic tool retained in expander.
+- [x] Write comprehensive unit tests in `tests/test_citation_validator.py` and `tests/test_rag.py` (78 passing tests total).
 
-### Phase 5: Financial Metrics, Risks & Outlook Extraction *(Upcoming)*
+### Phase 5: Financial Metrics, Risks & Outlook Extraction *(Next Phase)*
 - [ ] Structured KPI extraction (Revenue, Net Income, Capex, EPS, etc.).
 - [ ] Deterministic Python YoY change calculations (avoiding LLM math).
 - [ ] Risk factor and management guidance itemization.

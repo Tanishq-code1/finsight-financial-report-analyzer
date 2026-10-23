@@ -21,7 +21,7 @@ def test_default_config(monkeypatch: pytest.MonkeyPatch):
     cfg = load_config()
     assert cfg.gemini_api_key is None
     assert cfg.has_api_key is False
-    assert cfg.gemini_generation_model == "gemini-2.5-flash"
+    assert cfg.gemini_generation_model == "gemini-3.8-flash"
     assert cfg.gemini_embedding_model == "gemini-embedding-2"
     assert cfg.embedding_dimension == 768
     assert cfg.max_upload_mb == 25

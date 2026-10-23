@@ -45,7 +45,7 @@ def load_config() -> AppConfig:
         if not api_key:
             api_key = None
 
-    generation_model = os.getenv("GEMINI_GENERATION_MODEL", "gemini-2.5-flash").strip()
+    generation_model = os.getenv("GEMINI_GENERATION_MODEL", "gemini-3.8-flash").strip()
     embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2").strip()
 
     try:

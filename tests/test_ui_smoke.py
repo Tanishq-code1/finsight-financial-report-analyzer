@@ -15,6 +15,8 @@ def test_core_module_imports():
         "financial_report_analyzer.embedding_service",
         "financial_report_analyzer.vector_store",
         "financial_report_analyzer.indexing_pipeline",
+        "financial_report_analyzer.citation_validator",
+        "financial_report_analyzer.rag",
     ]
     for mod in modules:
         loaded = importlib.import_module(mod)

@@ -34,7 +34,7 @@ class Citation(BaseModel):
     chunk_id: str = Field(description="ID of the retrieved source chunk")
     page_number: int = Field(ge=1, description="1-based page number where the evidence appears")
     quote: str = Field(description="Direct verbatim or normalized quote from the source chunk")
-    source_filename: str = Field(description="Source document name")
+    source_filename: str = Field(default="", description="Source document name")
 
 
 class RAGAnswer(BaseModel):
@@ -49,6 +49,10 @@ class RAGAnswer(BaseModel):
     limitations: List[str] = Field(
         default_factory=list,
         description="Noted ambiguities, missing periods, or data gaps",
+    )
+    abstention_reason: Optional[str] = Field(
+        default=None,
+        description="Explicit explanation when report does not contain sufficient evidence",
     )
 
 
