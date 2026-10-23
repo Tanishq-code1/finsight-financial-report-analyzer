@@ -153,7 +153,7 @@ tests\test_vector_store.py ......                                        [100%]
 
 =========================== short test summary info ===========================
 SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-in. Set RUN_LIVE_GEMINI_TESTS=1 and GEMINI_API_KEY to execute.
-======================= 159 passed, 1 skipped in 71.40s =======================
+======================= 168 passed, 1 skipped in 18.65s =======================
 ```
 
 ### Benchmark Scorecard Output
@@ -163,7 +163,7 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 - **Assertions:** 110/110 passed (0 failed).
 - **Quality Gates:** 100% PASSED.
 - **Baseline Comparison:** PARITY across all metrics.
-- **Execution Time:** ~0.38s offline.
+- **Execution Time:** ~0.35s offline.
 
 ---
 
@@ -183,7 +183,19 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 5. Known Limitations & Operational Boundaries
+## 5. Production Hotfix: Pipeline Interface, RPC RetryInfo & 48 RPM Spacing (v1.0.2)
+
+- **Pipeline Interface Mismatch:** Corrected `run_indexing_pipeline()` to support `chunks` and `**kwargs`, ensuring backwards and forward compatibility across caller styles and eliminating `TypeError: unexpected keyword argument 'chunks'`.
+- **Render Error on Failed Analysis:** Fixed Tab 1 Overview rendering to guard against `report_analysis=None`, preventing `AttributeError: 'NoneType' object has no attribute 'company_name'`.
+- **Google GenAI RPC Error Details:** Implemented `extract_genai_error_payload()` to parse nested `google.rpc.RetryInfo` (`retryDelay: "25s"`) and `QuotaFailure` metric `embed_content_free_tier_tokens`.
+- **Strict Delay Invariant:** Provider-specified wait times (e.g. 25 seconds) are **never shortened** to arbitrary exponential backoff intervals (1s, 2s, 4s); conservative jitter is strictly positive.
+- **Smooth 48 RPM Inter-Request Spacing:** Enforced `min_request_interval = 1.25s` in `TokenPacer` to smooth traffic and eliminate 429-triggering microbursts.
+- **Token Reservation Pattern:** Added `TokenReservation` handles with safe cancellation on request failure.
+- **Deadline Tracking:** Enforces `embedding_deadline_sec` (120s) preventing indefinite hang loops while preserving partial progress.
+
+---
+
+## 6. Known Limitations & Operational Boundaries
 
 1. **Optical Character Recognition (OCR):** Scanned, image-only PDFs without extractable text layers trigger an informative warning. OCR is intentionally not implemented.
 2. **Deterministic Offline Benchmark vs. Live Models:** The offline evaluation uses deterministic fake embeddings and structured mocks for regression testing. It does **not** establish 100% real-world accuracy on novel or non-standard corporate filings.
@@ -192,7 +204,7 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 6. Release Readiness Summary
+## 7. Release Readiness Summary
 - Git branch: `master`
-- Version: `1.0.1`
+- Version: `1.0.2`
 - Deployment status: Ready for push to GitHub and automatic redeployment on Streamlit Community Cloud.

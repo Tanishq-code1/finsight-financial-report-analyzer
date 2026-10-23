@@ -31,6 +31,7 @@ def run_indexing_pipeline(
     chroma_client: Optional[ClientAPI] = None,
     progress_callback: Optional[Callable[[str, float], None]] = None,
     chunks: Optional[List[ChunkRecord]] = None,
+    **kwargs,
 ) -> IndexingPipelineResult:
     """Execute end-to-end Phase 3 indexing pipeline for extracted report pages.
 

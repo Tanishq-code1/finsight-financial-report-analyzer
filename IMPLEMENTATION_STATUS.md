@@ -19,9 +19,10 @@
 | **Phase 7** | Evaluation Benchmark & Scorecard | **Complete** | Gold benchmark dataset (v1.0.0, 110 cases), mathematical metrics engine, CLI runner with baseline comparator. |
 | **Phase 8** | Deployment & Security Hardening | **Complete** | Cloud `sys.path` resolution, Streamlit Secrets support, abuse & cost safeguards, clean venv verified, deployment guide. |
 | **Hotfix v1.0.1** | Token-Aware Embedding Pacing & Resumption | **Complete** | Sliding-window `TokenPacer` (TPM/RPM limits + 20% safety margin), GenAI error classifier, jittered backoff, in-memory partial progress caching & resume button. |
+| **Hotfix v1.0.2** | RPC RetryInfo, 48 RPM Spacing & Pipeline Interface | **Complete** | Safe nested Google RPC `RetryInfo.retryDelay` extraction (never shortened), 48 RPM smooth request spacing (1.25s), safe rendering on `analysis=None`, `run_indexing_pipeline(**kwargs)` contract compatibility. |
 
 ## Verification Summary
-- **Unit & Regression Tests:** 159 passed, 1 skipped (opt-in live test) across 21 test modules.
+- **Unit & Regression Tests:** 168 passed, 1 skipped (opt-in live test) across 21 test modules.
 - **Offline Evaluation Benchmark:** 110/110 gold assertions passed with 100% Quality Gates Passed and Baseline Parity.
 - **Syntax & Compilation:** `python -m py_compile` passed with 0 errors across all source and test files.
 - **Security Audit:** 0 credentials found in git-tracked files; `.env` and `secrets.toml` excluded; zero-disk PDF/vector persistence.

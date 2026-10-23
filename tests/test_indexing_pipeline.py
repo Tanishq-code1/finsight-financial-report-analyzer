@@ -114,3 +114,58 @@ def test_indexing_pipeline_embedding_failure_aborts():
             chroma_client=chroma_client,
         )
     assert "timeout" in str(exc_info.value)
+
+
+def test_synthetic_4page_pdf_app_invocation_path():
+    """Regression test: verify 4-page synthetic PDF proceeds through the exact app invocation path.
+
+    Steps:
+    1. Parse PDF using load_pdf()
+    2. Generate sentence-aware ChunkRecord objects using chunk_pages()
+    3. Pass both pages and chunks to run_indexing_pipeline() with kwargs matching app.py
+    4. Verify no TypeError ('unexpected keyword argument') occurs and vector index is populated.
+    """
+    from financial_report_analyzer.pdf_loader import load_pdf
+    from financial_report_analyzer.chunker import chunk_pages, ChunkerConfig
+    from evals.fixtures import create_synthetic_apex_10k_pdf
+
+    pdf_bytes = create_synthetic_apex_10k_pdf()
+    config = AppConfig()
+
+    # Step 1: PDF Extraction (app.py:467)
+    load_result = load_pdf(pdf_bytes, "Apex_Global_Technologies_FY2024_10K.pdf", config=config)
+    assert load_result.metadata.total_pages == 4
+
+    # Step 2: Chunk creation (app.py:480)
+    chunker_cfg = ChunkerConfig(
+        target_tokens=config.chunk_size_tokens,
+        overlap_tokens=config.chunk_overlap_tokens,
+    )
+    chunks = chunk_pages(load_result.pages, config=chunker_cfg)
+    assert len(chunks) > 0
+
+    # Step 3: Exact application invocation call (app.py:495)
+    progress_updates = []
+
+    def update_progress(desc: str, frac: float) -> None:
+        progress_updates.append((desc, frac))
+
+    chroma_client = chromadb.EphemeralClient()
+    fake_embedder = FakeEmbeddingService(dimension=768)
+
+    pipeline_output = run_indexing_pipeline(
+        pages=load_result.pages,
+        chunks=chunks,
+        config=config,
+        embedding_service=fake_embedder,
+        chroma_client=chroma_client,
+        progress_callback=update_progress,
+    )
+
+    assert pipeline_output.indexing_result.total_pages == 4
+    assert pipeline_output.indexing_result.total_chunks == len(chunks)
+    assert pipeline_output.vector_store.count() == len(chunks)
+    assert len(progress_updates) > 0
+
+    pipeline_output.vector_store.delete()
+

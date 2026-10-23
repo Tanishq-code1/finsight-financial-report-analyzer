@@ -34,17 +34,17 @@ def _get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
 class AppConfig:
     """Immutable application configuration container."""
 
-    gemini_api_key: Optional[str]
-    gemini_generation_model: str
-    gemini_embedding_model: str
-    embedding_dimension: int
-    max_upload_mb: int
-    max_pdf_pages: int
-    chunk_size_tokens: int
-    chunk_overlap_tokens: int
-    retrieval_top_k: int
-    min_evidence_threshold: float
-    log_level: str
+    gemini_api_key: Optional[str] = None
+    gemini_generation_model: str = "gemini-3.8-flash"
+    gemini_embedding_model: str = "gemini-embedding-2"
+    embedding_dimension: int = 768
+    max_upload_mb: int = 25
+    max_pdf_pages: int = 250
+    chunk_size_tokens: int = 850
+    chunk_overlap_tokens: int = 120
+    retrieval_top_k: int = 5
+    min_evidence_threshold: float = 0.35
+    log_level: str = "INFO"
     session_qa_budget: int = 25
     session_analysis_budget: int = 5
     embedding_tpm_limit: int = 30000
@@ -54,6 +54,7 @@ class AppConfig:
     embedding_initial_backoff_sec: float = 2.0
     embedding_max_backoff_sec: float = 60.0
     embedding_batch_size: int = 1
+    embedding_deadline_sec: float = 120.0
 
     @property
     def max_upload_bytes(self) -> int:
@@ -83,7 +84,11 @@ class AppConfig:
             "embedding_tpm_limit": self.embedding_tpm_limit,
             "embedding_rpm_limit": self.embedding_rpm_limit,
             "embedding_safety_margin": self.embedding_safety_margin,
+            "embedding_max_retries": self.embedding_max_retries,
+            "embedding_initial_backoff_sec": self.embedding_initial_backoff_sec,
+            "embedding_max_backoff_sec": self.embedding_max_backoff_sec,
             "embedding_batch_size": self.embedding_batch_size,
+            "embedding_deadline_sec": self.embedding_deadline_sec,
             "api_key_configured": self.has_api_key,
         }
 
@@ -145,39 +150,48 @@ def load_config() -> AppConfig:
         session_analysis_budget = 5
 
     try:
-        embedding_tpm_limit = int(_get_setting("EMBEDDING_TPM_LIMIT", "30000"))
+        embedding_tpm_limit = max(1, int(_get_setting("EMBEDDING_TPM_LIMIT", "30000")))
     except ValueError:
         embedding_tpm_limit = 30000
 
     try:
-        embedding_rpm_limit = int(_get_setting("EMBEDDING_RPM_LIMIT", "60"))
+        embedding_rpm_limit = max(1, int(_get_setting("EMBEDDING_RPM_LIMIT", "60")))
     except ValueError:
         embedding_rpm_limit = 60
 
     try:
-        embedding_safety_margin = float(_get_setting("EMBEDDING_SAFETY_MARGIN", "0.80"))
+        margin_val = float(_get_setting("EMBEDDING_SAFETY_MARGIN", "0.80"))
+        embedding_safety_margin = max(0.05, min(1.0, margin_val))
     except ValueError:
         embedding_safety_margin = 0.80
 
     try:
-        embedding_max_retries = int(_get_setting("EMBEDDING_MAX_RETRIES", "5"))
+        embedding_max_retries = max(0, int(_get_setting("EMBEDDING_MAX_RETRIES", "5")))
     except ValueError:
         embedding_max_retries = 5
 
     try:
-        embedding_initial_backoff_sec = float(_get_setting("EMBEDDING_INITIAL_BACKOFF_SEC", "2.0"))
+        embedding_initial_backoff_sec = max(0.1, float(_get_setting("EMBEDDING_INITIAL_BACKOFF_SEC", "2.0")))
     except ValueError:
         embedding_initial_backoff_sec = 2.0
 
     try:
-        embedding_max_backoff_sec = float(_get_setting("EMBEDDING_MAX_BACKOFF_SEC", "60.0"))
+        embedding_max_backoff_sec = max(
+            embedding_initial_backoff_sec,
+            float(_get_setting("EMBEDDING_MAX_BACKOFF_SEC", "60.0")),
+        )
     except ValueError:
         embedding_max_backoff_sec = 60.0
 
     try:
-        embedding_batch_size = int(_get_setting("EMBEDDING_BATCH_SIZE", "1"))
+        embedding_batch_size = max(1, int(_get_setting("EMBEDDING_BATCH_SIZE", "1")))
     except ValueError:
         embedding_batch_size = 1
+
+    try:
+        embedding_deadline_sec = max(10.0, float(_get_setting("EMBEDDING_DEADLINE_SEC", "120.0")))
+    except ValueError:
+        embedding_deadline_sec = 120.0
 
     return AppConfig(
         gemini_api_key=api_key,
@@ -200,6 +214,7 @@ def load_config() -> AppConfig:
         embedding_initial_backoff_sec=embedding_initial_backoff_sec,
         embedding_max_backoff_sec=embedding_max_backoff_sec,
         embedding_batch_size=embedding_batch_size,
+        embedding_deadline_sec=embedding_deadline_sec,
     )
 
 

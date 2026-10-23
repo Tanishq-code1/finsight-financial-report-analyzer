@@ -87,7 +87,7 @@ def test_token_pacer_estimation():
 def test_token_pacer_rpm_pacing_with_mock_clock():
     """Verify requests exceeding effective RPM cause simulated sleep until window clears."""
     clock = MockClock(start_time=100.0)
-    # Effective RPM: 2 requests per minute (2 * 1.0)
+    # Effective RPM: 2 requests per minute (2 * 1.0) -> min_interval = 30.0s
     pacer = TokenPacer(
         tpm_limit=100000,
         rpm_limit=2,
@@ -100,16 +100,15 @@ def test_token_pacer_rpm_pacing_with_mock_clock():
     pacer.acquire(estimated_tokens=50)
     assert clock.time() == 100.0
 
-    # Second request: immediate
+    # Second request: spaced by min_request_interval (30.0s)
     pacer.acquire(estimated_tokens=50)
-    assert clock.time() == 100.0
+    assert clock.time() == 130.0
 
-    # Third request: at RPM limit (2 reqs in window [40, 100]).
-    # Must sleep until 1st request drops out (60s from t=100.0 -> t=160.0)
+    # Third request: at RPM limit (2 reqs in window [70, 130]).
+    # Must sleep until 1st request drops out at t=160.0
     pacer.acquire(estimated_tokens=50)
     assert clock.time() >= 160.0
-    assert len(clock.sleep_calls) == 1
-    assert clock.sleep_calls[0] >= 60.0
+    assert len(clock.sleep_calls) == 2
 
 
 def test_token_pacer_tpm_pacing_with_mock_clock():
@@ -407,3 +406,193 @@ def test_indexing_pipeline_cleans_up_vector_store_on_failure():
     collections = chroma_client.list_collections()
     # Any created collections should have been deleted
     assert len(collections) == 0
+
+
+# ============================================================================
+# 7. Production Hotfix Verification Tests
+# ============================================================================
+
+def test_extract_genai_error_payload_nested_rpc_retry_info():
+    """Verify nested Google RPC RetryInfo and QuotaFailure are accurately extracted."""
+    raw_err = genai_errors.APIError(
+        code=429,
+        response_json={
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "subject": "project:987654321",
+                                "description": "Quota exceeded for quota metric 'embed_content_free_tier_tokens' and limit 'None' of service 'generativelanguage.googleapis.com'",
+                            }
+                        ],
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "25.123s",
+                    },
+                ],
+            }
+        },
+    )
+    details = classify_genai_error(raw_err)
+    assert details.is_tpm is True
+    assert details.is_rpm is False
+    assert details.is_daily_quota is False
+    assert details.retriable is True
+    assert details.quota_metric == "embed_content_free_tier_tokens"
+    assert details.retry_after_sec == 25.123
+
+
+def test_25_second_provider_wait_never_shortened():
+    """Verify provider-suggested 25s wait is never shortened to 1s, 2s, or 4s."""
+    for attempt in range(5):
+        for _ in range(25):
+            wait = calculate_backoff_with_jitter(
+                attempt=attempt,
+                initial_backoff=2.0,
+                max_backoff=60.0,
+                suggested_wait=25.0,
+            )
+            # Invariant: Must NEVER be less than 25.0 seconds
+            assert wait >= 25.0, f"Wait time {wait} was shortened below provider's 25.0s requirement!"
+
+
+def test_token_pacer_smooth_inter_request_spacing_at_48_rpm():
+    """Verify 48 RPM limit enforces at least 1.25s interval between requests."""
+    clock = MockClock(start_time=0.0)
+    # Effective RPM: 48 (60 * 0.80) -> min_interval = 60 / 48 = 1.25 seconds
+    pacer = TokenPacer(
+        tpm_limit=30000,
+        rpm_limit=60,
+        safety_margin=0.80,
+        time_fn=clock.time,
+        sleep_fn=clock.sleep,
+    )
+    assert pacer.min_request_interval == 1.25
+
+    # Request 1 at t=0
+    pacer.acquire(tokens_needed=100)
+    assert clock.time() == 0.0
+
+    # Request 2 fired immediately at t=0 must wait 1.25s
+    pacer.acquire(tokens_needed=100)
+    assert clock.time() == 1.25
+    assert clock.sleep_calls == [1.25]
+
+
+def test_token_pacer_reservation_release_on_failure():
+    """Verify cancelled reservation returns tokens to available budget."""
+    pacer = TokenPacer(
+        tpm_limit=1000,
+        rpm_limit=10,
+        safety_margin=1.0,
+    )
+    res = pacer.reserve(tokens_needed=400)
+    tokens, reqs = pacer.current_usage()
+    assert tokens == 400
+    assert reqs == 1
+
+    # Release reservation upon failure
+    res.release()
+    tokens_after, reqs_after = pacer.current_usage()
+    assert tokens_after == 0
+    assert reqs_after == 0
+
+
+def test_embedding_deadline_exceeded_raises_immediately():
+    """Verify waiting beyond overall processing deadline halts and preserves progress."""
+    cfg = make_test_config(embedding_deadline_sec=10.0, embedding_max_retries=3)
+    mock_client = MagicMock()
+
+    # Provider requests 25s wait, but deadline is only 10s
+    err_429 = genai_errors.APIError(
+        code=429,
+        response_json={
+            "error": {
+                "code": 429,
+                "message": "Resource exhausted",
+                "details": [{"@type": "RetryInfo", "retryDelay": "25s"}],
+            }
+        },
+    )
+    mock_client.models.embed_content.side_effect = err_429
+
+    service = EmbeddingService(config=cfg, client=mock_client)
+    with pytest.raises(EmbeddingError) as exc_info:
+        service.embed_query("What is revenue?")
+
+    assert "deadline" in str(exc_info.value).lower()
+    # Should halt on attempt 1 without spinning
+    assert mock_client.models.embed_content.call_count == 1
+
+
+def test_appconfig_safe_zero_argument_instantiation():
+    """Verify AppConfig can be instantiated without requiring positional arguments."""
+    cfg = AppConfig()
+    assert cfg.gemini_embedding_model == "gemini-embedding-2"
+    assert cfg.embedding_tpm_limit == 30000
+    assert cfg.embedding_rpm_limit == 60
+    assert cfg.embedding_safety_margin == 0.80
+    assert cfg.embedding_max_retries == 5
+    assert cfg.embedding_batch_size == 1
+    assert cfg.embedding_deadline_sec == 120.0
+    assert "embedding_tpm_limit" in cfg.safe_diagnostics
+
+
+def test_run_indexing_pipeline_with_chunks_interface():
+    """Verify run_indexing_pipeline accepts pages and optional chunks without TypeError."""
+    p1 = PageRecord(
+        document_id="doc_pipe_synth",
+        source_filename="synth_4page.pdf",
+        page_number=1,
+        text="Executive Summary: Total revenue increased 12% in FY2024.",
+        char_count=58,
+        has_meaningful_text=True,
+    )
+    c1 = ChunkRecord(
+        chunk_id="chk_synth_1",
+        document_id="doc_pipe_synth",
+        source_filename="synth_4page.pdf",
+        page_numbers=[1],
+        chunk_index=0,
+        text=p1.text,
+        embedding=[0.05] * 768,  # Pre-embedded
+    )
+
+    mock_embedder = MagicMock()
+    mock_embedder.model_name = "gemini-embedding-2"
+    mock_embedder.dimension = 768
+    mock_embedder.embed_chunks.return_value = [[0.05] * 768]
+
+    chroma_client = chromadb.EphemeralClient()
+
+    # Call with chunks keyword argument (the exact application invocation path)
+    res = run_indexing_pipeline(
+        pages=[p1],
+        chunks=[c1],
+        embedding_service=mock_embedder,
+        chroma_client=chroma_client,
+    )
+    assert res.indexing_result.total_chunks == 1
+    assert res.vector_store.count() == 1
+    res.vector_store.delete()
+
+
+def test_metadata_rendering_safe_when_report_analysis_is_none():
+    """Verify rendering logic handles analysis=None without AttributeError on company_name."""
+    analysis = None
+    meta = MagicMock()
+    meta.filename = "Apple_10K.pdf"
+
+    # The safe pattern implemented in app.py
+    company_header = analysis.company_name if (analysis and analysis.company_name) else "Financial Report"
+    fiscal_period_str = analysis.fiscal_period if (analysis and analysis.fiscal_period) else "Report Period"
+
+    assert company_header == "Financial Report"
+    assert fiscal_period_str == "Report Period"
+

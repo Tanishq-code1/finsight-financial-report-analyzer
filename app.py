@@ -616,8 +616,18 @@ def main() -> None:
         else:
             meta = st.session_state.report_metadata
             chunks_count = len(st.session_state.chunk_records) if st.session_state.chunk_records else 0
-            index_badge = "✅ Vector Index Ready" if st.session_state.is_indexed else "⚠️ Text Extracted (Index Paused)"
+            if st.session_state.is_indexed:
+                index_badge = "✅ Vector Index Ready"
+            elif st.session_state.indexing_error:
+                index_badge = "❌ Vector Index Incomplete"
+            elif not config.has_api_key:
+                index_badge = "⚠️ Indexing Paused (No API Key)"
+            else:
+                index_badge = "⚠️ Indexing Incomplete"
+
             analysis = st.session_state.report_analysis
+            company_header = analysis.company_name if (analysis and analysis.company_name) else "Financial Report"
+            fiscal_period_str = analysis.fiscal_period if (analysis and analysis.fiscal_period) else "Report Period"
 
             status_badge = "⏳ Awaiting Extraction"
             if analysis:
@@ -627,16 +637,18 @@ def main() -> None:
                     status_badge = f"⚠️ Partial Analysis ({analysis.batches_succeeded} ok, {analysis.batches_failed} failed)"
                 else:
                     status_badge = "❌ Extraction Failed"
+            elif st.session_state.indexing_error:
+                status_badge = "❌ Processing Incomplete"
 
             st.markdown(
                 f"""
                 <div class="metric-card">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <h4 style="margin: 0;">{analysis.company_name or 'Document'}: {meta.filename}</h4>
+                        <h4 style="margin: 0;">{company_header}: {meta.filename}</h4>
                         <span class="tag-pill" style="font-weight: 600;">{status_badge}</span>
                     </div>
                     <p style="margin-top: 0.5rem; color: #94A3B8; font-size: 0.9rem;">
-                        Period: <strong>{analysis.fiscal_period if analysis and analysis.fiscal_period else 'Report Period'}</strong> | 
+                        Period: <strong>{fiscal_period_str}</strong> | 
                         Pages: <strong>{meta.total_pages}</strong> | 
                         Chunks: <strong>{chunks_count}</strong> | 
                         Vector Store: <strong>{index_badge}</strong>
@@ -645,6 +657,12 @@ def main() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
+            if st.session_state.indexing_error:
+                st.warning(
+                    f"⚠️ **Vector Indexing Incomplete:** {st.session_state.indexing_error}\n\n"
+                    "Your extracted document text is safely preserved in memory. Click **Resume Indexing** in the sidebar to continue, or **Clear Report** to start over."
+                )
 
             if analysis:
                 # Display reporting discrepancies if any
@@ -869,15 +887,27 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
         elif not st.session_state.is_indexed:
-            st.markdown(
-                """
-                <div class="empty-card">
-                    <h4>Vector Index Not Available</h4>
-                    <p>Document text is extracted, but vector retrieval and grounded Q&A require configuring <code>GEMINI_API_KEY</code>.</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            if st.session_state.indexing_error:
+                st.markdown(
+                    f"""
+                    <div class="empty-card">
+                        <h4>Vector Index Incomplete</h4>
+                        <p>Grounded Q&A requires completing vector indexing. Indexing was interrupted: <em>{st.session_state.indexing_error}</em></p>
+                        <p>Your extracted document text is preserved in memory. Click <strong>Resume Indexing</strong> in the sidebar to resume.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    """
+                    <div class="empty-card">
+                        <h4>Vector Index Not Available</h4>
+                        <p>Document text is extracted, but vector retrieval and grounded Q&A require configuring <code>GEMINI_API_KEY</code>.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
         else:
             # Suggested Questions Quick Bar
             st.markdown("**Suggested Research Questions:**")
