@@ -1,8 +1,8 @@
 # Implementation Status — Financial Report Analyzer
 
 ## Active Phase
-- Current Phase: **Phase 5 Complete (Financial Metrics, Risks, and Outlook Extraction)**
-- Next Phase: **Phase 6 (Exports & Usability Polish)**
+- Current Phase: **Phase 6 Complete (Multi-Format Exports, Export Validation, and Usability Polish)**
+- Next Phase: **Phase 7 (Evaluation & Benchmark)**
 
 ## Completed Items
 1. **Repository & Architecture**: Modular layout under `financial-report-analyzer`.
@@ -56,14 +56,22 @@
     - Financial Metrics Tab: Structured comparison table with reported vs. prior values, YoY changes, and page citation expanders.
     - Risks & Outlook Tab: Two-column layout itemizing disclosed risks with mitigations and management forward guidance.
     - Sources & Processing Tab: Full extraction audit statistics, batch completion metrics, and conflict notices.
-15. **Test Coverage**:
-    - 102 tests total (101 passing offline, 1 opt-in skipped live smoke test).
+15. **Multi-Format Export Service**: `src/financial_report_analyzer/export_service.py`:
+    - Canonical JSON export adhering to schema `1.0.0` with full provenance, UTC timestamp, and non-investment advice notice.
+    - CSV exports for metrics (with deterministic Python YoY calculations), risk factors, and forward guidance.
+    - Formula injection protection (`escape_csv_formula`) guarding against `=, +, -, @, \t, \r` execution in spreadsheet software without breaking pure numeric fields.
+    - Formatted Markdown executive report export with KPI summary tables and escaped markdown table pipes (`\|`).
+    - Path traversal and forbidden filename character sanitization (`sanitize_export_filename`).
+    - In-memory Streamlit download center in Overview, Metrics, and Risks/Outlook tabs without disk writes or external API re-invocations.
+16. **Test Coverage**:
+    - 116 tests total (115 passing offline, 1 opt-in skipped live smoke test).
+    - Comprehensive test suites in `tests/test_export_service.py` and `tests/test_export_validation.py`.
     - 100% pass rate with zero network access required for standard test suite.
 
 ## Verification & Checks
 - **Test Command**: `.venv\Scripts\python -m pytest tests -v`
-- **Result**: 101 passed, 1 skipped in 8.31s.
+- **Result**: 115 passed, 1 skipped in 11.79s.
 - **App Launch Check**: `python -m py_compile app.py` succeeded with 0 errors.
 
 ## Next Action
-- Implement **Phase 6**: Multi-format exports (JSON, CSV, Markdown), export validation, and usability polish.
+- Implement **Phase 7**: Evaluation and benchmark suite with golden evaluation dataset, retrieval precision/recall@k, and citation faithfulness benchmarks.

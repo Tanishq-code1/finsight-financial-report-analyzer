@@ -29,6 +29,14 @@ from financial_report_analyzer.financial_calculations import (
     calculate_free_cash_flow,
     parse_financial_number,
 )
+from financial_report_analyzer.export_service import (
+    export_analysis_json,
+    export_metrics_csv,
+    export_risks_csv,
+    export_outlook_csv,
+    export_analysis_markdown,
+    sanitize_export_filename,
+)
 
 # Initialize logging
 setup_logging()
@@ -607,6 +615,81 @@ def main() -> None:
                     for t in analysis.key_takeaways:
                         st.markdown(f"- {t}")
 
+                # Multi-Format Exports Section
+                st.divider()
+                st.markdown("### 📥 Export Verified Analysis")
+                st.caption(
+                    "Download the complete verified findings in machine-readable JSON, spreadsheet-friendly CSVs, "
+                    "or a structured Markdown report. Generated in-memory from active session state."
+                )
+
+                if analysis.analysis_status == "partial":
+                    st.warning(
+                        "⚠️ **Notice on Partial Analysis:** Some document batches could not be processed. "
+                        "The exports below contain all verified findings from successful batches along with documented limitations."
+                    )
+
+                exp_col1, exp_col2, exp_col3, exp_col4, exp_col5 = st.columns(5)
+                with exp_col1:
+                    json_data = export_analysis_json(
+                        analysis,
+                        metadata=meta,
+                        generation_model=config.gemini_generation_model,
+                    ).encode("utf-8")
+                    json_name = sanitize_export_filename(meta.filename, "complete_analysis", "json")
+                    st.download_button(
+                        label="📄 Full JSON",
+                        data=json_data,
+                        file_name=json_name,
+                        mime="application/json",
+                        use_container_width=True,
+                        help="Complete structured machine-readable analysis with full provenance.",
+                    )
+                with exp_col2:
+                    csv_metrics_data = export_metrics_csv(analysis, metadata=meta).encode("utf-8")
+                    csv_metrics_name = sanitize_export_filename(meta.filename, "financial_metrics", "csv")
+                    st.download_button(
+                        label="📊 Metrics CSV",
+                        data=csv_metrics_data,
+                        file_name=csv_metrics_name,
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="Financial metrics table with Python YoY changes and formula injection protection.",
+                    )
+                with exp_col3:
+                    csv_risks_data = export_risks_csv(analysis, metadata=meta).encode("utf-8")
+                    csv_risks_name = sanitize_export_filename(meta.filename, "disclosed_risks", "csv")
+                    st.download_button(
+                        label="⚠️ Risks CSV",
+                        data=csv_risks_data,
+                        file_name=csv_risks_name,
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="Disclosed risk factors with categories and stated mitigations.",
+                    )
+                with exp_col4:
+                    csv_outlook_data = export_outlook_csv(analysis, metadata=meta).encode("utf-8")
+                    csv_outlook_name = sanitize_export_filename(meta.filename, "management_outlook", "csv")
+                    st.download_button(
+                        label="🔮 Outlook CSV",
+                        data=csv_outlook_data,
+                        file_name=csv_outlook_name,
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="Management forward guidance, target periods, and qualitative commentary.",
+                    )
+                with exp_col5:
+                    md_data = export_analysis_markdown(analysis, metadata=meta).encode("utf-8")
+                    md_name = sanitize_export_filename(meta.filename, "analysis_report", "md")
+                    st.download_button(
+                        label="📑 Report (MD)",
+                        data=md_data,
+                        file_name=md_name,
+                        mime="text/markdown",
+                        use_container_width=True,
+                        help="Formatted executive Markdown document suitable for sharing.",
+                    )
+
                 if analysis.limitations:
                     with st.expander(f"ℹ️ Scope & Extraction Limitations ({len(analysis.limitations)})", expanded=False):
                         for lim in analysis.limitations:
@@ -853,12 +936,28 @@ def main() -> None:
 
     # Tab 3: Financial Metrics
     with tab_metrics:
-        st.subheader("Key Financial Performance Indicators (KPIs)")
-        st.caption(
-            "Structured extraction of revenue, profitability, cash flow, debt, and balance-sheet metrics with Python-computed YoY comparisons."
-        )
-
         analysis = st.session_state.report_analysis
+        meta = st.session_state.report_metadata
+
+        col_m_head, col_m_dl = st.columns([4, 1])
+        with col_m_head:
+            st.subheader("Key Financial Performance Indicators (KPIs)")
+            st.caption(
+                "Structured extraction of revenue, profitability, cash flow, debt, and balance-sheet metrics with Python-computed YoY comparisons."
+            )
+        with col_m_dl:
+            if analysis and analysis.metrics:
+                csv_m_bytes = export_metrics_csv(analysis, metadata=meta).encode("utf-8")
+                csv_m_name = sanitize_export_filename(meta.filename if meta else "report", "financial_metrics", "csv")
+                st.download_button(
+                    "📊 Download CSV",
+                    data=csv_m_bytes,
+                    file_name=csv_m_name,
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Download financial metrics table as a spreadsheet-ready CSV.",
+                )
+
         if not analysis:
             st.markdown(
                 """
@@ -960,7 +1059,20 @@ def main() -> None:
             col_risk, col_outlook = st.columns(2)
 
             with col_risk:
-                st.markdown(f"#### ⚠️ Disclosed Risk Factors ({len(analysis.risks)})")
+                r_head, r_dl = st.columns([3, 2])
+                with r_head:
+                    st.markdown(f"#### ⚠️ Disclosed Risks ({len(analysis.risks)})")
+                with r_dl:
+                    if analysis.risks:
+                        csv_r_bytes = export_risks_csv(analysis, metadata=meta).encode("utf-8")
+                        csv_r_name = sanitize_export_filename(meta.filename if meta else "report", "disclosed_risks", "csv")
+                        st.download_button(
+                            "⚠️ Risks CSV",
+                            data=csv_r_bytes,
+                            file_name=csv_r_name,
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
                 if not analysis.risks:
                     st.info("No material risk factors identified in analyzed pages.")
                 for r in analysis.risks:
@@ -991,7 +1103,20 @@ def main() -> None:
                                 st.caption(f'"{q}"')
 
             with col_outlook:
-                st.markdown(f"#### 🔮 Management Outlook & Guidance ({len(analysis.outlook)})")
+                o_head, o_dl = st.columns([3, 2])
+                with o_head:
+                    st.markdown(f"#### 🔮 Outlook & Guidance ({len(analysis.outlook)})")
+                with o_dl:
+                    if analysis.outlook:
+                        csv_o_bytes = export_outlook_csv(analysis, metadata=meta).encode("utf-8")
+                        csv_o_name = sanitize_export_filename(meta.filename if meta else "report", "management_outlook", "csv")
+                        st.download_button(
+                            "🔮 Outlook CSV",
+                            data=csv_o_bytes,
+                            file_name=csv_o_name,
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
                 if not analysis.outlook:
                     st.info("No forward-looking guidance or outlook items identified.")
                 for o in analysis.outlook:

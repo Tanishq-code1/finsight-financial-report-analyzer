@@ -1,7 +1,7 @@
 # Build Progress — Financial Report Analyzer (FinSight)
 
 Last Updated: 2026-10-23
-Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4 & Phase 5 Complete**
+Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5 & Phase 6 Complete**
 
 ---
 
@@ -149,11 +149,24 @@ Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4 & Phase 5 Complete
   - `tests/test_financial_analysis_pipeline.py`: 4 tests.
   - Full suite: 101 passed, 1 skipped in 8.31s.
 
-### Phase 6: Exports & Usability Polish *(Next Phase)*
-- [ ] JSON, CSV, and Markdown export generators.
-- [ ] Reset validation ensuring no stale data remains across reports.
+### Phase 6: Multi-Format Exports, Export Validation & Usability Polish
+- [x] Implement in-memory export service (`export_service.py`):
+  - Canonical JSON export (`export_analysis_json`) adhering to schema version `1.0.0` with ISO UTC timestamps, coverage statistics, metrics, risks, outlook, Decimal precision, and non-investment advice disclaimer.
+  - CSV exports (`export_metrics_csv`, `export_risks_csv`, `export_outlook_csv`, `export_analysis_csv`) with documented headers, RFC 4180 quoting, and source page provenance.
+  - CSV formula injection protection (`escape_csv_formula`): escapes `=`, `+`, `-`, `@`, `\t`, `\r` prefixes with single quote (`'`) on text columns without breaking numeric parsing on dedicated numeric fields.
+  - Executive Markdown export (`export_analysis_markdown`) with GitHub-style alerts, markdown table formatting, and escaped pipe characters (`\|`).
+  - Filename sanitization (`sanitize_export_filename`): strips directory traversal (`../`) and forbidden filesystem characters (`<>:"/\\|?*`).
+- [x] Streamlit UI integration (`app.py`):
+  - Overview Tab: Multi-format download center supporting all 5 export formats with partial-analysis notifications and real-time generation.
+  - Financial Metrics Tab: Quick CSV download for financial metrics and YoY changes.
+  - Risks & Outlook Tab: Quick CSV download for disclosed risk factors and guidance items.
+  - Usability Polish: Zero disk persistence, zero external API calls during export, clean state transitions on upload/reset.
+- [x] Comprehensive test suites:
+  - `tests/test_export_service.py`: 9 unit tests covering JSON serialization, partial analysis, CSV formula injection defense, metrics CSV, risks/outlook CSV, empty collections, Markdown export, pipe escaping, and filename sanitization.
+  - `tests/test_export_validation.py`: 5 validation tests covering type checking rejection, JSON round-trip fidelity, CSV round-trip fidelity with `csv.DictReader`, secret leakage prevention, and Markdown table structure preservation.
+  - `tests/test_ui_smoke.py`: Updated to verify `export_service` module imports.
 
-### Phase 7: Evaluation & Benchmark *(Upcoming)*
+### Phase 7: Evaluation & Benchmark *(Next Phase)*
 - [ ] Curated gold evaluation question set.
 - [ ] Precision, recall@k, and citation validity scoring.
 
@@ -174,37 +187,45 @@ Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4 & Phase 5 Complete
 ```text
 ============================= test session starts =============================
 platform win32 -- Python 3.13.2, pytest-9.1.1, pluggy-1.7.0
-rootdir: c:\Users\shubh\Downloads\Project-anti\financial-report-analyzer
+rootdir: C:\Users\shubh\Downloads\Project-anti\financial-report-analyzer
 configfile: pyproject.toml
 plugins: anyio-4.15.1, mock-3.17.0
-collected 57 items
+collected 116 items
 
-financial-report-analyzer\tests\test_chunker.py .........                [ 15%]
-financial-report-analyzer\tests\test_config.py ....                      [ 22%]
-financial-report-analyzer\tests\test_embedding_service.py ........s      [ 38%]
-financial-report-analyzer\tests\test_indexing_pipeline.py ...            [ 43%]
-financial-report-analyzer\tests\test_pdf_loader.py ...............       [ 70%]
-financial-report-analyzer\tests\test_schemas.py ........                 [ 84%]
-financial-report-analyzer\tests\test_ui_smoke.py ...                     [ 89%]
-financial-report-analyzer\tests\test_vector_store.py ......              [100%]
+tests\test_chunker.py .........                                          [  7%]
+tests\test_citation_validator.py .........                               [ 15%]
+tests\test_config.py ....                                                [ 18%]
+tests\test_embedding_service.py ........s                                [ 26%]
+tests\test_export_service.py .........                                   [ 34%]
+tests\test_export_validation.py .....                                    [ 38%]
+tests\test_financial_analysis_pipeline.py ....                           [ 42%]
+tests\test_financial_calculations.py ..............                      [ 54%]
+tests\test_financial_extractor.py .....                                  [ 58%]
+tests\test_indexing_pipeline.py ...                                      [ 61%]
+tests\test_pdf_loader.py ...............                                 [ 74%]
+tests\test_rag.py .............                                          [ 85%]
+tests\test_schemas.py ........                                           [ 92%]
+tests\test_ui_smoke.py ...                                               [ 94%]
+tests\test_vector_store.py ......                                        [100%]
 
-======================== 56 passed, 1 skipped in 11.49s =======================
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-in. Set RUN_LIVE_GEMINI_TESTS=1 and GEMINI_API_KEY to execute.
+======================= 115 passed, 1 skipped in 11.79s =======================
 ```
 
-- **Pass Rate:** 56 passed, 1 opt-in live test skipped (100% passing offline).
+- **Pass Rate:** 115 passed, 1 opt-in live test skipped (100% passing offline).
 - **Static Compilation:** `python -m py_compile app.py` passed with 0 errors.
 - **Dependency Imports:** Verified with Python 3.13.2.
 
 ---
 
 ## 4. Known Issues & Blockers
-- None. Ephemeral Chroma collections and Google GenAI SDK function with full session isolation in-memory.
+- None. Ephemeral Chroma collections, Google GenAI SDK, and in-memory export service function with full session isolation in-memory.
 
 ---
 
 ## 5. Next Steps
-- Proceed with **Phase 4 (Grounded Question Answering and Citation Validation)**:
-  - Create `src/financial_report_analyzer/rag.py`.
-  - Wire prompts in `prompts/qa_system.txt`.
-  - Validate citation chunk IDs, page numbers, and quote substrings against retrieved passages.
-  - Enforce explicit abstention when evidence is insufficient.
+- Proceed with **Phase 7 (Evaluation & Benchmark)**:
+  - Curate golden evaluation dataset covering 10-K and 10-Q reports.
+  - Benchmark retrieval precision and recall@k.
+  - Benchmark citation faithfulness and numerical verification.

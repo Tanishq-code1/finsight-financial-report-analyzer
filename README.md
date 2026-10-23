@@ -133,6 +133,26 @@ All settings can be configured via environment variables or `.streamlit/secrets.
 
 ---
 
+## Multi-Format Exports & Security
+
+FinSight allows downloading active session analysis results in three formats directly from the browser without disk persistence:
+
+1. **Structured JSON (`export_analysis_json`)**:
+   - Versioned schema contract (`export_schema_version: "1.0.0"`).
+   - ISO 8601 UTC export timestamp (`generated_at_utc`).
+   - Full provenance: document metadata, processing metrics, coverage stats, structured metrics, risks, and outlook.
+   - Non-investment advice disclaimer embedded.
+2. **Spreadsheet CSVs (`export_metrics_csv`, `export_risks_csv`, `export_outlook_csv`, `export_analysis_csv`)**:
+   - RFC 4180 standard formatting with dedicated headers.
+   - **CSV Formula Injection Defense**: Text fields beginning with `=`, `+`, `-`, `@`, `\t`, or `\r` are prepended with `'` to prevent DDE code execution in Microsoft Excel and Google Sheets. Dedicated numeric columns are preserved for native spreadsheet calculations.
+3. **Executive Markdown Report (`export_analysis_markdown`)**:
+   - Polished report layout with executive summary, strategic takeaways, formatted KPI tables (with escaped table pipes `\|`), risk factors, and forward guidance.
+4. **Zero Server Disk Persistence**:
+   - Exports are generated strictly in-memory and delivered via Streamlit `st.download_button`. No file artifacts or customer documents are written to the server filesystem.
+   - Filenames are sanitized against path traversal (`../`) and illegal filesystem characters.
+
+---
+
 ## Running Tests
 
 ### Offline Test Suite
