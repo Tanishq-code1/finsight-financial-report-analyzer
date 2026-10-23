@@ -253,3 +253,86 @@ def test_apptest_runs_cleanly_with_partial_and_error_states():
     at.session_state.pipeline_stage = "INDEXING_FAILED"
     at.run()
     assert len(at.exception) == 0
+
+
+def test_apptest_failed_analysis_renders_retry_button_and_no_crash():
+    """Verify that when extraction fails (analysis_status='failed'), an error card with retry button is displayed."""
+    from streamlit.testing.v1 import AppTest
+    from financial_report_analyzer.schemas import DocumentMetadata, ReportAnalysis
+
+    at = AppTest.from_file(_APP_PATH, default_timeout=30)
+    at.session_state.document_id = "doc_failed_test"
+    at.session_state.report_metadata = DocumentMetadata(
+        filename="acme_failed.pdf",
+        file_size_bytes=2048,
+        total_pages=4,
+        meaningful_pages=4,
+        document_id="doc_failed_test",
+    )
+    at.session_state.report_analysis = ReportAnalysis(
+        document_id="doc_failed_test",
+        company_name=None,
+        fiscal_period=None,
+        total_pages=4,
+        pages_analyzed=0,
+        batches_succeeded=0,
+        batches_failed=2,
+        analysis_status="failed",
+        executive_summary="",
+        key_takeaways=[],
+        metrics=[],
+        risks=[],
+        outlook=[],
+        limitations=["The AI models are currently experiencing high demand (status 503)."],
+        model_used="gemini-3.8-flash",
+        fallback_used=False,
+        verification_rate=0.0,
+        generated_at="2026-10-24T00:00:00Z",
+    )
+    at.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_FAILED"
+    at.run()
+
+    assert len(at.exception) == 0
+    # Retry button must be rendered
+    retry_buttons = [b for b in at.button if "Retry Financial Extraction" in b.label]
+    assert len(retry_buttons) >= 1
+
+
+def test_apptest_fallback_model_displays_badge():
+    """Verify fallback model usage is rendered in UI when fallback_used is True."""
+    from streamlit.testing.v1 import AppTest
+    from financial_report_analyzer.schemas import DocumentMetadata, ReportAnalysis
+
+    at = AppTest.from_file(_APP_PATH, default_timeout=30)
+    at.session_state.document_id = "doc_fallback_test"
+    at.session_state.report_metadata = DocumentMetadata(
+        filename="acme_fallback.pdf",
+        file_size_bytes=2048,
+        total_pages=2,
+        meaningful_pages=2,
+        document_id="doc_fallback_test",
+    )
+    at.session_state.report_analysis = ReportAnalysis(
+        document_id="doc_fallback_test",
+        company_name="Acme",
+        fiscal_period="FY2024",
+        total_pages=2,
+        pages_analyzed=2,
+        batches_succeeded=1,
+        batches_failed=0,
+        analysis_status="complete",
+        executive_summary="Executive summary completed via fallback.",
+        key_takeaways=[],
+        metrics=[],
+        risks=[],
+        outlook=[],
+        limitations=[],
+        model_used="gemini-3.6-flash",
+        fallback_used=True,
+        verification_rate=1.0,
+        generated_at="2026-10-24T00:00:00Z",
+    )
+    at.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
+    at.run()
+
+    assert len(at.exception) == 0

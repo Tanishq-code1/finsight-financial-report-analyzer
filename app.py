@@ -506,6 +506,7 @@ def main() -> None:
                     "This budget manages external model costs on the public demo. Clear report or reset the session to restart."
                 )
             else:
+                target_doc_id = st.session_state.document_id
                 st.session_state.analysis_count += 1
                 st.session_state.is_processing = True
                 st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_RUNNING"
@@ -524,18 +525,42 @@ def main() -> None:
                         config=config,
                         progress_callback=update_fin_p,
                     )
+                    # Guard against stale document ID if user navigated or reset during in-flight call
+                    if st.session_state.document_id != target_doc_id:
+                        logger.warning("Active document changed during financial extraction; discarding stale results.")
+                        return
+
                     st.session_state.report_analysis = analysis
-                    st.session_state.analysis_document_id = st.session_state.document_id
-                    st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
-                    s_text.text("Financial extraction complete!")
-                    st.success(
-                        f"Financial Analysis Ready: Extracted {len(analysis.metrics)} metrics, "
-                        f"{len(analysis.risks)} risks, and {len(analysis.outlook)} forward outlook items."
-                    )
+                    st.session_state.analysis_document_id = target_doc_id
+
+                    if analysis.analysis_status == "failed":
+                        st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_FAILED"
+                        fail_msg = (
+                            analysis.limitations[0]
+                            if analysis.limitations
+                            else "Financial extraction failed due to model unavailability (503) or request timeout."
+                        )
+                        st.session_state.financial_error = fail_msg
+                        s_text.text("Financial extraction could not complete.")
+                        st.error(f"Financial Extraction Notice: {fail_msg}")
+                    elif analysis.analysis_status == "partial":
+                        st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
+                        s_text.text("Financial extraction complete (partial).")
+                        st.warning(
+                            f"Partial Financial Analysis Ready: Extracted {len(analysis.metrics)} metrics, "
+                            f"{len(analysis.risks)} risks ({analysis.batches_succeeded} of {analysis.batches_succeeded + analysis.batches_failed} batches succeeded)."
+                        )
+                    else:
+                        st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
+                        s_text.text("Financial extraction complete!")
+                        st.success(
+                            f"Financial Analysis Ready: Extracted {len(analysis.metrics)} metrics, "
+                            f"{len(analysis.risks)} risks, and {len(analysis.outlook)} forward outlook items."
+                        )
                 except Exception as fin_err:
                     logger.error("Financial analysis pipeline error: %s", str(fin_err), exc_info=True)
                     st.session_state.financial_error = getattr(fin_err, "user_friendly_message", str(fin_err))
-                    st.session_state.pipeline_stage = "INDEXED" if st.session_state.is_indexed else "PDF_EXTRACTED"
+                    st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_FAILED"
                     st.error(f"Financial Analysis Error: {st.session_state.financial_error}")
                 finally:
                     st.session_state.is_processing = False
@@ -774,7 +799,14 @@ def main() -> None:
                     "Your extracted document text is safely preserved in memory. Click **Resume Indexing** in the sidebar to continue, or **Clear Report** to start over."
                 )
 
-            if analysis:
+            if analysis and analysis.analysis_status != "failed":
+                # Model fallback notice if primary 503 triggered fallback model
+                if getattr(analysis, "fallback_used", False):
+                    st.info(
+                        f"ℹ️ **Model Fallback Notice:** Primary model was unavailable due to high demand; "
+                        f"analysis was successfully completed using fallback model `{analysis.model_used}`."
+                    )
+
                 # Display reporting discrepancies if any
                 if analysis.data_conflicts:
                     st.markdown(
@@ -900,6 +932,33 @@ def main() -> None:
                     with st.expander(f"ℹ️ Scope & Extraction Limitations ({len(analysis.limitations)})", expanded=False):
                         for lim in analysis.limitations:
                             st.caption(f"• {lim}")
+            elif analysis and analysis.analysis_status == "failed":
+                fail_reason = (
+                    analysis.limitations[0]
+                    if analysis.limitations
+                    else (st.session_state.financial_error or "Gemini API unavailable (HTTP 503) or request timed out.")
+                )
+                model_note = f" (Attempted: {analysis.model_used or config.gemini_generation_model})"
+                st.markdown(
+                    f"""
+                    <div class="empty-card" style="border-left: 4px solid #EF4444;">
+                        <h4 style="color: #F87171;">⚠️ Financial Extraction Incomplete{model_note}</h4>
+                        <p>{fail_reason}</p>
+                        <p style="font-size: 0.85rem; color: #94A3B8;">Document text and vector index remain safely preserved in memory. You can retry extraction without re-uploading.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "🔄 Retry Financial Extraction",
+                    type="primary",
+                    key="btn_retry_fin_failed",
+                    width="stretch",
+                    disabled=st.session_state.is_processing,
+                ):
+                    st.session_state.report_analysis = None
+                    st.session_state.financial_error = None
+                    st.rerun()
             else:
                 if st.session_state.financial_error:
                     st.warning(f"⚠️ **Prior Extraction Notice:** {st.session_state.financial_error}")
@@ -927,6 +986,7 @@ def main() -> None:
                             "This budget manages external model costs on the public demo. Clear report or reset the session to restart."
                         )
                     else:
+                        target_doc_id = st.session_state.document_id
                         st.session_state.analysis_count += 1
                         st.session_state.is_processing = True
                         st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_RUNNING"
@@ -938,16 +998,29 @@ def main() -> None:
                                     metadata=st.session_state.report_metadata,
                                     config=config,
                                 )
+                                if st.session_state.document_id != target_doc_id:
+                                    logger.warning("Document changed during extraction; discarding stale results.")
+                                    return
+
                                 st.session_state.report_analysis = analysis_res
-                                st.session_state.analysis_document_id = st.session_state.document_id
-                                st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
+                                st.session_state.analysis_document_id = target_doc_id
+                                if analysis_res.analysis_status == "failed":
+                                    st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_FAILED"
+                                    st.session_state.financial_error = (
+                                        analysis_res.limitations[0]
+                                        if analysis_res.limitations
+                                        else "Financial extraction failed due to model availability or timeout."
+                                    )
+                                else:
+                                    st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
                                 st.rerun()
                             except Exception as run_err:
                                 logger.error("Tab 1 extraction run error: %s", str(run_err), exc_info=True)
                                 st.session_state.financial_error = getattr(run_err, "user_friendly_message", str(run_err))
-                                st.session_state.pipeline_stage = "INDEXED" if st.session_state.is_indexed else "PDF_EXTRACTED"
+                                st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_FAILED"
                                 st.error(f"Extraction failed: {st.session_state.financial_error}")
                             finally:
+                                st.session_state.is_processing = False
                                 st.session_state.is_processing = False
 
     # Tab 2: Ask the Report (Source-Grounded RAG Q&A & Diagnostic Vector Search)
@@ -1210,7 +1283,7 @@ def main() -> None:
                     help="Download financial metrics table as a spreadsheet-ready CSV.",
                 )
 
-        if not analysis:
+        if not analysis or analysis.analysis_status == "failed":
             st.markdown(
                 """
                 <div class="empty-card">
@@ -1220,6 +1293,8 @@ def main() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+            if analysis and analysis.analysis_status == "failed":
+                st.warning("⚠️ Financial extraction previously failed. You can retry from the Overview tab or sidebar.")
         else:
             if not analysis.metrics:
                 st.info("No structured financial metrics were detected in the analyzed pages.")
@@ -1297,7 +1372,7 @@ def main() -> None:
         )
 
         analysis = st.session_state.report_analysis
-        if not analysis:
+        if not analysis or analysis.analysis_status == "failed":
             st.markdown(
                 """
                 <div class="empty-card">
@@ -1307,6 +1382,8 @@ def main() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+            if analysis and analysis.analysis_status == "failed":
+                st.warning("⚠️ Financial extraction previously failed. You can retry from the Overview tab or sidebar.")
         else:
             col_risk, col_outlook = st.columns(2)
 
@@ -1407,6 +1484,9 @@ def main() -> None:
             analysis = st.session_state.report_analysis
             st.subheader("Financial Analysis Execution & Provenance Audit")
             v_rate_pct = analysis.verification_rate * 100
+            model_info = analysis.model_used or config.gemini_generation_model
+            if getattr(analysis, "fallback_used", False):
+                model_info += " (Fallback Model Activated)"
             st.markdown(
                 f"""
                 <div class="metric-card">
@@ -1414,7 +1494,7 @@ def main() -> None:
                     <p>Pages Analyzed: <strong>{analysis.pages_analyzed}</strong> of <strong>{analysis.total_pages}</strong> ({analysis.batches_succeeded} batches succeeded, {analysis.batches_failed} failed)</p>
                     <p>KPI Metrics Extracted: <strong>{len(analysis.metrics)}</strong> | Disclosed Risks: <strong>{len(analysis.risks)}</strong> | Outlook Items: <strong>{len(analysis.outlook)}</strong></p>
                     <p>Citation Verification Rate: <strong>{v_rate_pct:.1f}%</strong> of claims confirmed against source page text</p>
-                    <p>Generated At: <code>{analysis.generated_at}</code> | Model: <code>{config.gemini_generation_model}</code></p>
+                    <p>Generated At: <code>{analysis.generated_at}</code> | Model: <code>{model_info}</code></p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1535,6 +1615,7 @@ def main() -> None:
         st.subheader("Safe Runtime Diagnostics")
         diag_col1, diag_col2, diag_col3 = st.columns(3)
         gen_m = getattr(config, "gemini_generation_model", "gemini-3.8-flash")
+        fallback_m = getattr(config, "gemini_generation_fallback_model", "gemini-3.6-flash")
         emb_m = getattr(config, "gemini_embedding_model", "gemini-embedding-2")
         emb_d = getattr(config, "embedding_dimension", 768)
         max_mb = getattr(config, "max_upload_mb", 25)
@@ -1555,6 +1636,7 @@ def main() -> None:
                     <div class="kpi-title">Configured Models</div>
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
                         LLM: <code>{gen_m}</code><br/>
+                        Fallback: <code>{fallback_m}</code><br/>
                         Embeddings: <code>{emb_m}</code> ({emb_d}D)
                     </div>
                 </div>

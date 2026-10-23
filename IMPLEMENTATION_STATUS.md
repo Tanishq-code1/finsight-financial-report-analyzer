@@ -21,9 +21,10 @@
 | **Hotfix v1.0.1** | Token-Aware Embedding Pacing & Resumption | **Complete** | Sliding-window `TokenPacer` (TPM/RPM limits + 20% safety margin), GenAI error classifier, jittered backoff, in-memory partial progress caching & resume button. |
 | **Hotfix v1.0.2** | RPC RetryInfo, 48 RPM Spacing & Pipeline Interface | **Complete** | Safe nested Google RPC `RetryInfo.retryDelay` extraction (never shortened), 48 RPM smooth request spacing (1.25s), safe rendering on `analysis=None`, `run_indexing_pipeline(**kwargs)` contract compatibility. |
 | **Hotfix v1.0.3** | Runtime Annotation Resolution & Extraction Hardening | **Complete** | Fixed runtime `NameError` for `Optional`/`FinancialMetric`, moved `render_kpi_card` to module scope, eliminated Streamlit `use_container_width` warnings, added `generation_timeout_sec` (120s) with httpx deadline, separated UI processing stages, prevented duplicate API calls, and added AppTest regression suite. |
+| **Hotfix v1.0.4** | Gemini 503 Resiliency, AFC Disabled & Fallback Model | **Complete** | Explicitly disabled SDK Automatic Function Calling (`automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True)`) and capped internal tenacity retries (`HttpRetryOptions(attempts=1)`), introduced configurable generation fallback model (`GEMINI_GENERATION_FALLBACK_MODEL=gemini-3.6-flash`), bounded primary 503 retries (1 max) before fallback, enforced monotonic request deadlines, guarded UI against failed analysis false-success display (rendering retry buttons instead of empty KPI cards), and added provenance badges. |
 
 ## Verification Summary
-- **Unit & Regression Tests:** 181 passed, 1 skipped (opt-in live test) across 21 test modules.
+- **Unit & Regression Tests:** 189 passed, 1 skipped (opt-in live test) across 21 test modules.
 - **Offline Evaluation Benchmark:** 110/110 gold assertions passed with 100% Quality Gates Passed and Baseline Parity.
 - **Syntax & Compilation:** `python -m py_compile` passed with 0 errors across all source and test files.
 - **Security Audit:** 0 credentials found in git-tracked files; `.env` and `secrets.toml` excluded; zero-disk PDF/vector persistence.

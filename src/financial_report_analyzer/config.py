@@ -33,6 +33,7 @@ def _get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
 _DEFAULT_CONFIG_VALUES: Dict[str, Any] = {
     "gemini_api_key": None,
     "gemini_generation_model": "gemini-3.8-flash",
+    "gemini_generation_fallback_model": "gemini-3.6-flash",
     "gemini_embedding_model": "gemini-embedding-2",
     "embedding_dimension": 768,
     "max_upload_mb": 25,
@@ -62,6 +63,7 @@ class AppConfig:
 
     gemini_api_key: Optional[str] = None
     gemini_generation_model: str = "gemini-3.8-flash"
+    gemini_generation_fallback_model: str = "gemini-3.6-flash"
     gemini_embedding_model: str = "gemini-embedding-2"
     embedding_dimension: int = 768
     max_upload_mb: int = 25
@@ -110,6 +112,7 @@ class AppConfig:
         """Safe runtime diagnostic summary containing no secrets or local filesystem paths."""
         return {
             "generation_model": getattr(self, "gemini_generation_model", "gemini-3.8-flash"),
+            "generation_fallback_model": getattr(self, "gemini_generation_fallback_model", "gemini-3.6-flash"),
             "embedding_model": getattr(self, "gemini_embedding_model", "gemini-embedding-2"),
             "embedding_dimension": getattr(self, "embedding_dimension", 768),
             "max_upload_mb": getattr(self, "max_upload_mb", 25),
@@ -138,6 +141,7 @@ def load_config() -> AppConfig:
     api_key = _get_setting("GEMINI_API_KEY")
 
     generation_model = _get_setting("GEMINI_GENERATION_MODEL", "gemini-3.8-flash")
+    generation_fallback_model = _get_setting("GEMINI_GENERATION_FALLBACK_MODEL", "gemini-3.6-flash")
     embedding_model = _get_setting("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2")
 
     try:
@@ -241,6 +245,7 @@ def load_config() -> AppConfig:
     return AppConfig(
         gemini_api_key=api_key,
         gemini_generation_model=generation_model,
+        gemini_generation_fallback_model=generation_fallback_model,
         gemini_embedding_model=embedding_model,
         embedding_dimension=embedding_dimension,
         max_upload_mb=max_upload_mb,

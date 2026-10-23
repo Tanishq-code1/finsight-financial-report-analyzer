@@ -227,6 +227,7 @@ def run_financial_analysis_pipeline(
 
     # 3. Initialize or use supplied extractor
     ext = extractor or FinancialExtractor(config=app_config)
+    pipeline_deadline = t_pipeline_start + getattr(app_config, "generation_timeout_sec", 120.0)
 
     raw_metrics: List[FinancialMetric] = []
     raw_risks: List[RiskItem] = []
@@ -235,6 +236,8 @@ def run_financial_analysis_pipeline(
     detected_company: Optional[str] = None
     detected_period: Optional[str] = None
     detected_title: Optional[str] = None
+    models_used: set = set()
+    any_fallback_used: bool = False
 
     batches_succeeded = 0
     batches_failed = 0
@@ -250,8 +253,13 @@ def run_financial_analysis_pipeline(
             )
 
         try:
-            batch_result = ext.extract_batch(batch, document_id=metadata.document_id)
+            batch_result = ext.extract_batch(batch, document_id=metadata.document_id, deadline=pipeline_deadline)
             batches_succeeded += 1
+
+            if batch_result.model_used:
+                models_used.add(batch_result.model_used)
+            if getattr(batch_result, "fallback_used", False):
+                any_fallback_used = True
 
             if batch_result.company_name and not detected_company:
                 detected_company = batch_result.company_name
@@ -361,15 +369,23 @@ def run_financial_analysis_pipeline(
         analysis_status = "partial"
     else:
         analysis_status = "failed"
+        if not limitations:
+            limitations.append("All extraction batches failed due to model availability.")
 
     pipeline_elapsed = time.monotonic() - t_pipeline_start
+    gen_m = getattr(ext, "generation_model", "gemini-3.8-flash")
+    if not isinstance(gen_m, str):
+        gen_m = "gemini-3.8-flash"
+    final_model_name = ", ".join(sorted(models_used)) if models_used else gen_m
     logger.info(
-        "Financial analysis pipeline finished in %.2fs (status: %s, %d metrics, %d risks, %d outlook)",
+        "Financial analysis pipeline finished in %.2fs (status: %s, %d metrics, %d risks, %d outlook, model: %s, fallback_used: %s)",
         pipeline_elapsed,
         analysis_status,
         len(calculated_metrics),
         len(resolved_risks),
         len(resolved_outlook),
+        final_model_name,
+        any_fallback_used,
     )
 
     if progress_callback:
@@ -394,4 +410,6 @@ def run_financial_analysis_pipeline(
         batches_failed=batches_failed,
         data_conflicts=metric_conflicts,
         verification_rate=round(verification_rate, 4),
+        model_used=final_model_name,
+        fallback_used=any_fallback_used,
     )

@@ -223,7 +223,29 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 7. Known Limitations & Operational Boundaries
+## 7. Critical Financial Extraction Hotfix: Gemini 503 Resiliency, AFC Disabled & Fallback Model (v1.0.4)
+
+- **Root Cause Diagnosis from Deployed Streamlit Cloud Logs:**
+  - `Gemini API error during financial extraction (status 503)`: `This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.` Model: `gemini-3.8-flash`.
+  - Automatic Function Calling (AFC): Google GenAI SDK logged `AFC is enabled with max remote calls: 10.` on each batch request because `GenerateContentConfig.automatic_function_calling` was omitted, introducing unnecessary SDK introspection overhead.
+  - SDK Tenacity Retry Multiplication: The Google GenAI SDK retried 5 times internally with tenacity while the application also retried 3 times, causing multi-minute request hangs (~236s on 4 pages).
+  - UI State Flaw: When all batches failed (`analysis_status="failed"`), `app.py` mistakenly treated `report_analysis` as populated, rendering empty KPI cards ("N/A"), blank executive summaries, and export buttons instead of a prominent retry/outage warning.
+- **Implemented Engineering Fixes:**
+  - **Explicitly Disabled AFC:** Set `automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True)` and explicitly passed `tools=None`, `tool_config=None` in `FinancialExtractor` and `RAGService`.
+  - **Capped SDK Internal Retries:** Configured `http_options=genai_types.HttpOptions(retry_options=genai_types.HttpRetryOptions(attempts=1))` across client initialization and generation configs, giving application-level logic exclusive, non-multiplied control over backoff and fallback.
+  - **Introduced Stable Generation Fallback Model:** Added `gemini_generation_fallback_model: str = "gemini-3.6-flash"` to `AppConfig`, defaults, `.env.example`, diagnostics, and UI.
+  - **Bounded 503 Backoff & Seamless Fallback:** Bounded primary model attempts to at most 1 retry with jittered backoff; upon persistent 503 availability error, extraction seamlessly falls back to `gemini-3.6-flash`.
+  - **Monotonic Request Deadlines:** Applied monotonic deadline checks against `generation_timeout_sec` (120s) to guarantee predictable termination.
+  - **Distinguished Error Classes:** Strict differentiation between 401/403 (fail immediately without retry), 429 daily quota (fail immediately without retry), 429 transient rate limit (bounded exponential backoff), and 503 service availability (bounded retry -> fallback model).
+  - **UI Defect Resolved:** Tab 1 and sidebar now detect `analysis.analysis_status == "failed"`, rendering a clear outage notice with an actionable `🔄 Retry Financial Extraction` button that preserves in-memory text and vector store without requiring re-upload. Fallback model provenance (`model_used`) and badges are displayed in Tab 1, Tab 5 (Audit), and Tab 6 (Configured Models).
+  - **Stale Document ID Guards:** Extraction results are discarded if the user uploaded a new document or cleared the session while an in-flight analysis request was running.
+- **Automated Verification:**
+  - Expanded test suite to 190 tests (189 passed, 1 skipped opt-in live test).
+  - Offline evaluation benchmark: 110/110 gold assertions passed with 100% Quality Gates Passed and baseline PARITY.
+
+---
+
+## 8. Known Limitations & Operational Boundaries
 
 1. **Optical Character Recognition (OCR):** Scanned, image-only PDFs without extractable text layers trigger an informative warning. OCR is intentionally not implemented.
 2. **Deterministic Offline Benchmark vs. Live Models:** The offline evaluation uses deterministic fake embeddings and structured mocks for regression testing. It does **not** establish 100% real-world accuracy on novel or non-standard corporate filings.
@@ -232,7 +254,7 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 8. Release Readiness Summary
+## 9. Release Readiness Summary
 - Git branch: `master`
-- Version: `1.0.3`
+- Version: `1.0.4`
 - Deployment status: Ready for push to GitHub and automatic redeployment on Streamlit Community Cloud.

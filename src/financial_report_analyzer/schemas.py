@@ -169,6 +169,8 @@ class ReportAnalysis(BaseModel):
     batches_failed: int = Field(default=0, ge=0, description="Number of analysis batches that failed")
     data_conflicts: List[str] = Field(default_factory=list, description="Unresolved reporting discrepancies")
     verification_rate: float = Field(default=1.0, ge=0.0, le=1.0, description="Ratio of verified citations")
+    model_used: Optional[str] = Field(default=None, description="Generation model that produced this analysis")
+    fallback_used: bool = Field(default=False, description="Whether fallback model was invoked during extraction")
 
 
 class BatchExtractionResult(BaseModel):
@@ -181,6 +183,8 @@ class BatchExtractionResult(BaseModel):
     risks: List[RiskItem] = Field(default_factory=list, description="Extracted risk disclosures")
     outlook: List[OutlookItem] = Field(default_factory=list, description="Extracted forward-looking guidance")
     executive_summary_excerpts: List[str] = Field(default_factory=list, description="Key strategic summary points")
+    model_used: Optional[str] = Field(default=None, description="Model that produced this batch")
+    fallback_used: bool = Field(default=False, description="Whether fallback model was used for this batch")
 
 
 class IngestionWarning(BaseModel):

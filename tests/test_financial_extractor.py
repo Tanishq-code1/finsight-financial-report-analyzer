@@ -255,3 +255,158 @@ def test_extractor_respects_custom_timeout(mock_config):
     )
     ext = FinancialExtractor(config=custom_cfg)
     assert ext.timeout_sec == 45.0
+
+
+def test_generation_config_disables_afc_and_caps_http_retries(mock_config):
+    """Verify GenerateContentConfig explicitly disables Automatic Function Calling and sets HttpRetryOptions attempts=1."""
+    ext = FinancialExtractor(config=mock_config)
+    cfg = ext._build_generation_config()
+
+    # Automatic Function Calling must be explicitly disabled
+    assert cfg.automatic_function_calling is not None
+    assert cfg.automatic_function_calling.disable is True
+    # Tools and tool_config must be None
+    assert cfg.tools is None
+    assert cfg.tool_config is None
+    # HTTP retries must be capped at 1 attempt to avoid internal tenacity loops
+    assert cfg.http_options is not None
+    assert cfg.http_options.retry_options is not None
+    assert cfg.http_options.retry_options.attempts == 1
+
+
+def test_503_primary_retry_succeeds(mock_config, sample_pages):
+    """Verify that a transient 503 on primary model is retried and succeeds without fallback."""
+    from google.genai import errors as genai_errors
+
+    mock_client = MagicMock()
+    err_503 = genai_errors.APIError(503, {"error": {"message": "High demand. Please try again later."}})
+
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "report_title": "Acme 10-K",
+            "company_name": "Acme",
+            "fiscal_period": "FY2024",
+            "metrics": [],
+            "risks": [],
+            "outlook": [],
+            "executive_summary_excerpts": [],
+        }
+    )
+
+    # First call 503, second call succeeds
+    mock_client.models.generate_content.side_effect = [err_503, mock_response]
+
+    ext = FinancialExtractor(config=mock_config, client=mock_client, initial_backoff=0.01)
+    res = ext.extract_batch(sample_pages, document_id="doc_test_10k")
+
+    assert res.company_name == "Acme"
+    assert res.fallback_used is False
+    assert res.model_used == "gemini-3.8-flash"
+    assert mock_client.models.generate_content.call_count == 2
+
+
+def test_503_primary_exhausted_fallback_succeeds(mock_config, sample_pages):
+    """Verify that persistent 503 on primary switches to fallback model and succeeds."""
+    from google.genai import errors as genai_errors
+
+    mock_client = MagicMock()
+    err_503 = genai_errors.APIError(503, {"error": {"message": "Model gemini-3.8-flash high demand"}})
+
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "report_title": "Acme 10-K",
+            "company_name": "Acme Fallback",
+            "fiscal_period": "FY2024",
+            "metrics": [],
+            "risks": [],
+            "outlook": [],
+            "executive_summary_excerpts": [],
+        }
+    )
+
+    # Primary attempt 1 and 2 fail with 503; fallback attempt succeeds
+    mock_client.models.generate_content.side_effect = [err_503, err_503, mock_response]
+
+    ext = FinancialExtractor(
+        config=mock_config,
+        client=mock_client,
+        initial_backoff=0.01,
+        fallback_model="gemini-3.6-flash",
+    )
+    res = ext.extract_batch(sample_pages, document_id="doc_test_10k")
+
+    assert res.company_name == "Acme Fallback"
+    assert res.fallback_used is True
+    assert res.model_used == "gemini-3.6-flash"
+    assert mock_client.models.generate_content.call_count == 3
+    # Verify the third call used fallback model
+    third_call_kwargs = mock_client.models.generate_content.call_args_list[2].kwargs
+    assert third_call_kwargs["model"] == "gemini-3.6-flash"
+
+
+def test_503_primary_and_fallback_both_fail(mock_config, sample_pages):
+    """Verify that if both primary and fallback experience 503, a clean RAGGenerationError is raised."""
+    from google.genai import errors as genai_errors
+
+    mock_client = MagicMock()
+    err_503 = genai_errors.APIError(503, {"error": {"message": "Service unavailable across models"}})
+    mock_client.models.generate_content.side_effect = err_503
+
+    ext = FinancialExtractor(
+        config=mock_config,
+        client=mock_client,
+        initial_backoff=0.01,
+        fallback_model="gemini-3.6-flash",
+    )
+    with pytest.raises(RAGGenerationError) as exc_info:
+        ext.extract_batch(sample_pages, document_id="doc_test_10k")
+
+    assert "503" in str(exc_info.value)
+    assert "high demand" in exc_info.value.user_friendly_message.lower() or "unavailable" in exc_info.value.user_friendly_message.lower()
+
+
+def test_429_daily_quota_fails_immediately_without_fallback(mock_config, sample_pages):
+    """Verify that HTTP 429 daily quota exhaustion does not retry or fallback."""
+    from google.genai import errors as genai_errors
+
+    mock_client = MagicMock()
+    err_429 = genai_errors.APIError(
+        429,
+        {"error": {"message": "Daily quota exceeded for embed/generate", "status": "RESOURCE_EXHAUSTED"}},
+    )
+    mock_client.models.generate_content.side_effect = err_429
+
+    ext = FinancialExtractor(
+        config=mock_config,
+        client=mock_client,
+        initial_backoff=0.01,
+        fallback_model="gemini-3.6-flash",
+    )
+    with pytest.raises(RAGGenerationError) as exc_info:
+        ext.extract_batch(sample_pages, document_id="doc_test_10k")
+
+    assert "daily quota" in str(exc_info.value).lower()
+    # Call count should be exactly 1: no retry, no fallback
+    assert mock_client.models.generate_content.call_count == 1
+
+
+def test_401_auth_error_fails_immediately_without_fallback(mock_config, sample_pages):
+    """Verify that HTTP 401 authentication error raises ConfigurationError immediately without retrying or fallback."""
+    from google.genai import errors as genai_errors
+
+    mock_client = MagicMock()
+    err_401 = genai_errors.APIError(401, {"error": {"message": "API key not valid"}})
+    mock_client.models.generate_content.side_effect = err_401
+
+    ext = FinancialExtractor(
+        config=mock_config,
+        client=mock_client,
+        initial_backoff=0.01,
+        fallback_model="gemini-3.6-flash",
+    )
+    with pytest.raises(ConfigurationError):
+        ext.extract_batch(sample_pages, document_id="doc_test_10k")
+
+    assert mock_client.models.generate_content.call_count == 1

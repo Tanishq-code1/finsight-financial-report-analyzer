@@ -113,9 +113,11 @@ class RAGService:
         system_prompt: Optional[str] = None,
         max_retries: int = 3,
         initial_backoff: float = 1.0,
+        fallback_model: Optional[str] = None,
     ) -> None:
         self.config = config or load_config()
         self.generation_model = self.config.gemini_generation_model or "gemini-3.8-flash"
+        self.fallback_model = fallback_model or getattr(self.config, "gemini_generation_fallback_model", "gemini-3.6-flash")
         self.system_prompt = system_prompt or load_system_prompt()
         self.citation_validator = citation_validator or CitationValidator(strict_page_check=True)
         self.max_retries = max_retries
@@ -132,7 +134,8 @@ class RAGService:
                     import httpx
                     timeout_val = getattr(self.config, "generation_timeout_sec", 120.0)
                     http_opts = genai_types.HttpOptions(
-                        client_args={"timeout": httpx.Timeout(timeout_val, connect=15.0, read=timeout_val)}
+                        client_args={"timeout": httpx.Timeout(timeout_val, connect=15.0, read=timeout_val)},
+                        retry_options=genai_types.HttpRetryOptions(attempts=1),
                     )
                     self._client = genai.Client(api_key=self.config.gemini_api_key, http_options=http_opts)
                 except Exception:
@@ -175,66 +178,122 @@ class RAGService:
             raise RetrievalError(f"Vector retrieval failed: {str(exc)}") from exc
 
     def _call_gemini_with_retry(self, user_prompt: str) -> str:
-        """Execute Gemini content generation with bounded exponential backoff for transient errors."""
+        """Execute Gemini content generation with bounded backoff and fallback on service unavailability."""
         client = self._require_client()
-        attempt = 0
 
-        # Configure structured schema generation
+        # Configure structured schema generation with AFC disabled and SDK retries capped to 1
         config = genai_types.GenerateContentConfig(
             system_instruction=self.system_prompt,
             response_mime_type="application/json",
             response_schema=RAGAnswer,
             temperature=0.0,
+            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
+            tools=None,
+            tool_config=None,
+            http_options=genai_types.HttpOptions(
+                retry_options=genai_types.HttpRetryOptions(attempts=1)
+            ),
         )
 
-        while True:
-            try:
-                logger.debug("Dispatching question to model '%s' (attempt %d)", self.generation_model, attempt + 1)
-                response = client.models.generate_content(
-                    model=self.generation_model,
-                    contents=user_prompt,
-                    config=config,
-                )
-                if not response or not response.text:
-                    raise RAGGenerationError("Received empty response from Gemini generation model.")
-                return response.text
+        models_to_try = [self.generation_model]
+        if self.fallback_model and self.fallback_model != self.generation_model:
+            models_to_try.append(self.fallback_model)
 
-            except genai_errors.APIError as exc:
-                status_code = getattr(exc, "code", None)
-                # HTTP 429: Too Many Requests, HTTP 503: Service Unavailable
-                if status_code in (429, 503) and attempt < self.max_retries:
-                    backoff_delay = self.initial_backoff * (2**attempt)
-                    logger.warning(
-                        "Transient Gemini API error (status %s). Retrying in %.2f seconds (attempt %d/%d)...",
-                        status_code,
-                        backoff_delay,
-                        attempt + 1,
-                        self.max_retries,
+        last_error: Optional[Exception] = None
+
+        for model_idx, model_name in enumerate(models_to_try):
+            is_fallback = model_idx > 0
+            # At most 2 attempts per model (1 initial + 1 retry) for 503
+            max_model_attempts = 2 if not is_fallback else 1
+
+            for attempt in range(max_model_attempts):
+                try:
+                    logger.debug("Dispatching question to model '%s' (attempt %d)", model_name, attempt + 1)
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=user_prompt,
+                        config=config,
                     )
-                    time.sleep(backoff_delay)
-                    attempt += 1
-                    continue
+                    if not response or not response.text:
+                        raise RAGGenerationError(f"Received empty response from Gemini generation model '{model_name}'.")
+                    return response.text
 
-                logger.error("Gemini API error during generation (status %s): %s", status_code, str(exc))
-                if status_code in (401, 403):
-                    msg = "Authentication failed: Invalid or unauthorized Gemini API key. Please verify GEMINI_API_KEY."
-                elif status_code == 429:
-                    msg = "Gemini API quota or rate limit exceeded. Please check your Google AI Studio quota or try again later."
-                elif status_code in (500, 503):
-                    msg = "Google Gemini API service outage (500/503). Please try again shortly."
-                else:
-                    msg = "Financial question answering failed due to a Gemini API service error. Please try again."
+                except genai_errors.APIError as exc:
+                    last_error = exc
+                    status_code = getattr(exc, "code", None)
 
-                raise RAGGenerationError(
-                    f"Gemini API generation failed (status {status_code}): {str(exc)}",
-                    user_friendly_message=msg,
-                ) from exc
+                    # HTTP 401/403: auth failure, do not retry or fallback
+                    if status_code in (401, 403):
+                        logger.error("Authentication error during RAG generation (status %s): %s", status_code, exc)
+                        raise RAGGenerationError(
+                            f"Gemini API authentication failed (status {status_code}): {str(exc)}",
+                            user_friendly_message="Authentication failed: Invalid or unauthorized Gemini API key. Please verify GEMINI_API_KEY.",
+                        ) from exc
 
-            except Exception as exc:
-                if isinstance(exc, RAGGenerationError):
-                    raise
-                logger.error("Unexpected error during LLM generation: %s", str(exc), exc_info=True)
-                raise RAGGenerationError(f"Generation failed: {str(exc)}") from exc
+                    # HTTP 429: Rate limit / quota
+                    if status_code == 429:
+                        err_str = str(exc).lower()
+                        is_daily = "daily" in err_str or "per_day" in err_str
+                        if is_daily:
+                            logger.error("Gemini API daily quota exhausted during generation: %s", exc)
+                            raise RAGGenerationError(
+                                f"Gemini API quota exhausted: {str(exc)}",
+                                user_friendly_message="Gemini API quota exceeded. Please check your Google AI Studio quota or try again later.",
+                            ) from exc
+                        # Transient 429 rate limit
+                        if attempt < self.max_retries:
+                            backoff = self.initial_backoff * (2**attempt)
+                            logger.warning("Transient 429 rate limit. Retrying in %.2fs...", backoff)
+                            time.sleep(backoff)
+                            continue
+
+                    # HTTP 503: Service Unavailable / High demand
+                    if status_code == 503:
+                        if attempt < max_model_attempts - 1:
+                            backoff = min(self.initial_backoff * (2**attempt), 5.0)
+                            logger.warning(
+                                "Gemini 503 high demand on '%s'. Retrying attempt %d/%d in %.2fs...",
+                                model_name,
+                                attempt + 2,
+                                max_model_attempts,
+                                backoff,
+                            )
+                            time.sleep(backoff)
+                            continue
+                        elif not is_fallback and len(models_to_try) > 1:
+                            logger.warning(
+                                "Gemini 503 persisted on primary '%s'. Switching to fallback model '%s'...",
+                                model_name,
+                                models_to_try[1],
+                            )
+                            break  # proceed to next model (fallback)
+
+                    # Other API errors
+                    logger.error("Gemini API error during generation on '%s' (status %s): %s", model_name, status_code, str(exc))
+                    if not is_fallback and len(models_to_try) > 1 and status_code in (500, 502, 503, 504):
+                        break  # try fallback on 5xx
+
+                    msg = (
+                        "Google Gemini API service outage (500/503). Please try again shortly."
+                        if status_code in (500, 503)
+                        else "Financial question answering failed due to a Gemini API service error. Please try again."
+                    )
+                    raise RAGGenerationError(
+                        f"Gemini API generation failed on '{model_name}' (status {status_code}): {str(exc)}",
+                        user_friendly_message=msg,
+                    ) from exc
+
+                except Exception as exc:
+                    if isinstance(exc, RAGGenerationError):
+                        raise
+                    logger.error("Unexpected error during LLM generation on '%s': %s", model_name, str(exc), exc_info=True)
+                    raise RAGGenerationError(f"Generation failed on '{model_name}': {str(exc)}") from exc
+
+        # If exhausted all models
+        raise RAGGenerationError(
+            f"All models exhausted. Last error: {str(last_error)}",
+            user_friendly_message="Google Gemini API is currently unavailable (503 high demand) across primary and fallback models. Please try again in a few moments.",
+        )
 
     def _parse_and_repair_json(self, raw_text: str) -> RAGAnswer:
         """Parse structured JSON from model response, applying controlled repair for markdown fences if necessary."""
