@@ -30,12 +30,13 @@ def run_indexing_pipeline(
     embedding_service: Optional[EmbeddingService] = None,
     chroma_client: Optional[ClientAPI] = None,
     progress_callback: Optional[Callable[[str, float], None]] = None,
+    chunks: Optional[List[ChunkRecord]] = None,
 ) -> IndexingPipelineResult:
     """Execute end-to-end Phase 3 indexing pipeline for extracted report pages.
 
     Workflow:
-    1. Sentence-aware chunking with 1-based page provenance.
-    2. Vector embedding generation via EmbeddingService.
+    1. Sentence-aware chunking with 1-based page provenance (or reuses existing in-memory chunks).
+    2. Vector embedding generation via EmbeddingService with token-aware pacing and partial preservation.
     3. Isolated ephemeral ChromaDB store creation.
     4. Indexing of chunks, vectors, and metadata.
     5. Safe cleanup if failures occur midway.
@@ -46,6 +47,7 @@ def run_indexing_pipeline(
         embedding_service: Configured EmbeddingService (instantiated if None).
         chroma_client: Optional Chroma ClientAPI (instantiates EphemeralClient if None).
         progress_callback: Optional callback receiving (step_description, fraction_complete).
+        chunks: Optional pre-existing ChunkRecord list (preserves existing embeddings across retries).
 
     Returns:
         IndexingPipelineResult containing summary, active vector store, and chunk records.
@@ -78,16 +80,19 @@ def run_indexing_pipeline(
 
     doc_id = pages[0].document_id
 
-    # Step 1: Chunking
-    if progress_callback:
-        progress_callback("Chunking report pages...", 0.1)
+    # Step 1: Chunking (or reuse existing chunks from memory)
+    if chunks is None:
+        if progress_callback:
+            progress_callback("Chunking report pages...", 0.1)
 
-    chunker_cfg = ChunkerConfig(
-        target_tokens=app_cfg.chunk_size_tokens,
-        overlap_tokens=app_cfg.chunk_overlap_tokens,
-    )
-    chunks = chunk_pages(pages, config=chunker_cfg)
-    logger.info("Generated %d chunks from %d pages for doc '%s'", len(chunks), len(pages), doc_id)
+        chunker_cfg = ChunkerConfig(
+            target_tokens=app_cfg.chunk_size_tokens,
+            overlap_tokens=app_cfg.chunk_overlap_tokens,
+        )
+        chunks = chunk_pages(pages, config=chunker_cfg)
+        logger.info("Generated %d chunks from %d pages for doc '%s'", len(chunks), len(pages), doc_id)
+    else:
+        logger.info("Reusing %d existing chunks in memory for doc '%s'", len(chunks), doc_id)
 
     if not chunks:
         logger.warning("No chunks were generated from the provided pages for doc '%s'", doc_id)

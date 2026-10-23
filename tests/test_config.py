@@ -32,6 +32,13 @@ def test_default_config(monkeypatch: pytest.MonkeyPatch):
     assert cfg.retrieval_top_k == 5
     assert cfg.min_evidence_threshold == 0.35
     assert cfg.log_level == "INFO"
+    assert cfg.embedding_tpm_limit == 30000
+    assert cfg.embedding_rpm_limit == 60
+    assert cfg.embedding_safety_margin == 0.80
+    assert cfg.embedding_max_retries == 5
+    assert cfg.embedding_initial_backoff_sec == 2.0
+    assert cfg.embedding_max_backoff_sec == 60.0
+    assert cfg.embedding_batch_size == 1
 
 
 def test_custom_config(sample_config_env):
@@ -46,6 +53,20 @@ def test_custom_config(sample_config_env):
     assert cfg.retrieval_top_k == 4
     assert cfg.min_evidence_threshold == 0.40
     assert cfg.log_level == "DEBUG"
+
+
+def test_embedding_rate_limit_env_config(monkeypatch: pytest.MonkeyPatch):
+    """Verify custom embedding rate limits loaded correctly from environment variables."""
+    monkeypatch.setenv("EMBEDDING_TPM_LIMIT", "45000")
+    monkeypatch.setenv("EMBEDDING_RPM_LIMIT", "100")
+    monkeypatch.setenv("EMBEDDING_SAFETY_MARGIN", "0.75")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "5")
+
+    cfg = load_config()
+    assert cfg.embedding_tpm_limit == 45000
+    assert cfg.embedding_rpm_limit == 100
+    assert cfg.embedding_safety_margin == 0.75
+    assert cfg.embedding_batch_size == 5
 
 
 def test_invalid_numeric_env_falls_back(monkeypatch: pytest.MonkeyPatch):

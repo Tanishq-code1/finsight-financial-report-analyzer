@@ -47,6 +47,13 @@ class AppConfig:
     log_level: str
     session_qa_budget: int = 25
     session_analysis_budget: int = 5
+    embedding_tpm_limit: int = 30000
+    embedding_rpm_limit: int = 60
+    embedding_safety_margin: float = 0.80
+    embedding_max_retries: int = 5
+    embedding_initial_backoff_sec: float = 2.0
+    embedding_max_backoff_sec: float = 60.0
+    embedding_batch_size: int = 1
 
     @property
     def max_upload_bytes(self) -> int:
@@ -73,6 +80,10 @@ class AppConfig:
             "min_evidence_threshold": self.min_evidence_threshold,
             "session_qa_budget": self.session_qa_budget,
             "session_analysis_budget": self.session_analysis_budget,
+            "embedding_tpm_limit": self.embedding_tpm_limit,
+            "embedding_rpm_limit": self.embedding_rpm_limit,
+            "embedding_safety_margin": self.embedding_safety_margin,
+            "embedding_batch_size": self.embedding_batch_size,
             "api_key_configured": self.has_api_key,
         }
 
@@ -133,6 +144,41 @@ def load_config() -> AppConfig:
     except ValueError:
         session_analysis_budget = 5
 
+    try:
+        embedding_tpm_limit = int(_get_setting("EMBEDDING_TPM_LIMIT", "30000"))
+    except ValueError:
+        embedding_tpm_limit = 30000
+
+    try:
+        embedding_rpm_limit = int(_get_setting("EMBEDDING_RPM_LIMIT", "60"))
+    except ValueError:
+        embedding_rpm_limit = 60
+
+    try:
+        embedding_safety_margin = float(_get_setting("EMBEDDING_SAFETY_MARGIN", "0.80"))
+    except ValueError:
+        embedding_safety_margin = 0.80
+
+    try:
+        embedding_max_retries = int(_get_setting("EMBEDDING_MAX_RETRIES", "5"))
+    except ValueError:
+        embedding_max_retries = 5
+
+    try:
+        embedding_initial_backoff_sec = float(_get_setting("EMBEDDING_INITIAL_BACKOFF_SEC", "2.0"))
+    except ValueError:
+        embedding_initial_backoff_sec = 2.0
+
+    try:
+        embedding_max_backoff_sec = float(_get_setting("EMBEDDING_MAX_BACKOFF_SEC", "60.0"))
+    except ValueError:
+        embedding_max_backoff_sec = 60.0
+
+    try:
+        embedding_batch_size = int(_get_setting("EMBEDDING_BATCH_SIZE", "1"))
+    except ValueError:
+        embedding_batch_size = 1
+
     return AppConfig(
         gemini_api_key=api_key,
         gemini_generation_model=generation_model,
@@ -147,6 +193,13 @@ def load_config() -> AppConfig:
         log_level=log_level,
         session_qa_budget=session_qa_budget,
         session_analysis_budget=session_analysis_budget,
+        embedding_tpm_limit=embedding_tpm_limit,
+        embedding_rpm_limit=embedding_rpm_limit,
+        embedding_safety_margin=embedding_safety_margin,
+        embedding_max_retries=embedding_max_retries,
+        embedding_initial_backoff_sec=embedding_initial_backoff_sec,
+        embedding_max_backoff_sec=embedding_max_backoff_sec,
+        embedding_batch_size=embedding_batch_size,
     )
 
 

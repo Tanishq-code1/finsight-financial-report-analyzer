@@ -153,7 +153,7 @@ tests\test_vector_store.py ......                                        [100%]
 
 =========================== short test summary info ===========================
 SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-in. Set RUN_LIVE_GEMINI_TESTS=1 and GEMINI_API_KEY to execute.
-======================= 144 passed, 1 skipped in 14.85s =======================
+======================= 159 passed, 1 skipped in 71.40s =======================
 ```
 
 ### Benchmark Scorecard Output
@@ -163,11 +163,27 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 - **Assertions:** 110/110 passed (0 failed).
 - **Quality Gates:** 100% PASSED.
 - **Baseline Comparison:** PARITY across all metrics.
-- **Execution Time:** ~0.4s offline.
+- **Execution Time:** ~0.38s offline.
 
 ---
 
-## 4. Known Limitations & Operational Boundaries
+## 4. Post-Release Hotfix: Token-Aware Embedding Pacing & Resumption (v1.0.1)
+
+- **Issue Addressed:** Large PDF uploads (e.g. 109 chunks) failed at chunk 60/109 due to Gemini Embedding 2 Token-Per-Minute (TPM) quota limits (30,000 TPM tier cap exceeded by unpaced burst traffic).
+- **Error Classifier (`classify_genai_error`):** Differentiates between:
+  1. Permanent daily quota exhaustion (`is_daily_quota = True`, non-retriable, halts immediately).
+  2. Transient TPM rate limits (`is_tpm = True`, retriable with backoff & token pacing).
+  3. Transient RPM rate limits (`is_rpm = True`, retriable).
+  4. Authentication failures (401/403, non-retriable).
+  5. Upstream server outages (500/503, retriable).
+  6. Provider suggested retry-after delays (parsed from `retry in Xs` / `wait Xs`).
+- **Token-Aware Pacing (`TokenPacer`):** Sliding 60-second window rate limiter enforcing effective TPM (30,000 * 0.80 = 24,000) and effective RPM (60 * 0.80 = 48) with 20% safety margin to prevent limit spikes on dense financial texts.
+- **In-Memory Partial Progress & Resumption:** In-memory `ChunkRecord.embedding` objects are saved immediately as each batch finishes. If interrupted, the sidebar displays an actionable resume button: `▶️ Resume Indexing ({remaining} chunks remaining)`. Resumption skips already-embedded chunks without duplicate API calls or charges.
+- **Ephemeral Zero-Disk Guarantee:** Incomplete Chroma collections are wiped on failure (`store.delete()`). No uploaded files or vectors touch persistent disk storage.
+
+---
+
+## 5. Known Limitations & Operational Boundaries
 
 1. **Optical Character Recognition (OCR):** Scanned, image-only PDFs without extractable text layers trigger an informative warning. OCR is intentionally not implemented.
 2. **Deterministic Offline Benchmark vs. Live Models:** The offline evaluation uses deterministic fake embeddings and structured mocks for regression testing. It does **not** establish 100% real-world accuracy on novel or non-standard corporate filings.
@@ -176,7 +192,7 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 5. Release Readiness Summary
+## 6. Release Readiness Summary
 - Git branch: `master`
-- Version: `1.0.0`
-- Deployment status: Ready for push to GitHub and launch on Streamlit Community Cloud.
+- Version: `1.0.1`
+- Deployment status: Ready for push to GitHub and automatic redeployment on Streamlit Community Cloud.

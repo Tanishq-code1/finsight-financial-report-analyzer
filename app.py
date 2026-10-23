@@ -247,6 +247,8 @@ def init_session_state() -> None:
         st.session_state.qa_count = 0
     if "analysis_count" not in st.session_state:
         st.session_state.analysis_count = 0
+    if "indexing_error" not in st.session_state:
+        st.session_state.indexing_error = None
 
 
 def clear_report_session() -> None:
@@ -266,6 +268,7 @@ def clear_report_session() -> None:
     st.session_state.vector_store = None
     st.session_state.indexing_result = None
     st.session_state.is_indexed = False
+    st.session_state.indexing_error = None
     st.session_state.report_analysis = None
     st.session_state.chat_history = []
     st.session_state.search_results = None
@@ -323,7 +326,7 @@ def main() -> None:
                 type="primary",
                 use_container_width=True,
                 disabled=not has_valid_upload or st.session_state.is_processing,
-                help="Extract text, generate chunks, and build ephemeral vector index.",
+                help="Extract text, generate chunks, and build ephemeral vector index with token-aware rate pacing.",
             )
         with col_clear:
             clear_clicked = st.button(
@@ -332,6 +335,64 @@ def main() -> None:
                 use_container_width=True,
                 disabled=st.session_state.is_processing,
             )
+
+        # Check for partial embedding progress to offer resume
+        has_partial_embeddings = False
+        remaining_chunks = 0
+        if st.session_state.chunk_records and not st.session_state.is_indexed:
+            done_count = sum(1 for c in st.session_state.chunk_records if c.embedding is not None)
+            total_count = len(st.session_state.chunk_records)
+            if 0 < done_count < total_count:
+                has_partial_embeddings = True
+                remaining_chunks = total_count - done_count
+
+        if has_partial_embeddings:
+            resume_clicked = st.button(
+                f"▶️ Resume Indexing ({remaining_chunks} chunks remaining)",
+                type="primary",
+                use_container_width=True,
+                disabled=st.session_state.is_processing,
+                help="Resume embedding the remaining chunks without re-embedding already processed pages in memory.",
+            )
+            if resume_clicked and config.has_api_key and st.session_state.page_records:
+                st.session_state.is_processing = True
+                p_bar_res = st.progress(0.0)
+                s_text_res = st.empty()
+
+                def update_resume_progress(desc: str, frac: float) -> None:
+                    s_text_res.text(desc)
+                    p_bar_res.progress(frac)
+
+                try:
+                    pipeline_output = run_indexing_pipeline(
+                        pages=st.session_state.page_records,
+                        chunks=st.session_state.chunk_records,
+                        config=config,
+                        progress_callback=update_resume_progress,
+                    )
+                    st.session_state.vector_store = pipeline_output.vector_store
+                    st.session_state.indexing_result = pipeline_output.indexing_result
+                    st.session_state.is_indexed = True
+                    st.session_state.indexing_error = None
+                    p_bar_res.progress(1.0)
+                    s_text_res.text("Indexing complete!")
+                    st.success(
+                        f"Indexed all {len(st.session_state.chunk_records)} chunks into active ephemeral ChromaDB collection!"
+                    )
+                    st.rerun()
+                except Exception as resume_err:
+                    logger.error("Resume indexing failed: %s", str(resume_err))
+                    st.session_state.is_indexed = False
+                    if st.session_state.vector_store is not None:
+                        try:
+                            st.session_state.vector_store.delete()
+                        except Exception:
+                            pass
+                        st.session_state.vector_store = None
+                    st.session_state.indexing_error = getattr(resume_err, "user_friendly_message", str(resume_err))
+                    st.error(f"Resume Error: {st.session_state.indexing_error}")
+                finally:
+                    st.session_state.is_processing = False
 
         # Explicit Financial Disclosures Analysis action button
         has_extracted_doc = bool(st.session_state.page_records)
@@ -384,6 +445,7 @@ def main() -> None:
             st.session_state.is_processing = True
             # Invalidate any prior financial analysis from previous document
             st.session_state.report_analysis = None
+            st.session_state.indexing_error = None
 
             # Safely delete any previous session vector collection
             if st.session_state.vector_store is not None:
@@ -424,7 +486,7 @@ def main() -> None:
 
                 # Step 3: Embeddings & Ephemeral ChromaDB Vector Indexing
                 if config.has_api_key:
-                    status_text.text("3/3: Generating embeddings & vector index...")
+                    status_text.text("3/3: Generating embeddings with token-aware rate pacing...")
 
                     def update_progress(desc: str, frac: float) -> None:
                         status_text.text(f"3/3: {desc}")
@@ -432,12 +494,14 @@ def main() -> None:
 
                     pipeline_output = run_indexing_pipeline(
                         pages=result.pages,
+                        chunks=chunks,
                         config=config,
                         progress_callback=update_progress,
                     )
                     st.session_state.vector_store = pipeline_output.vector_store
                     st.session_state.indexing_result = pipeline_output.indexing_result
                     st.session_state.is_indexed = True
+                    st.session_state.indexing_error = None
 
                     progress_bar.progress(1.0)
                     status_text.text("Processing complete!")
@@ -461,7 +525,24 @@ def main() -> None:
 
             except (DocumentValidationError, PDFParsingError, EmbeddingError, VectorStoreError) as err:
                 logger.error("Pipeline error: %s", str(err))
-                st.error(f"Processing Error: {err.user_friendly_message}")
+                st.session_state.is_indexed = False
+                st.session_state.indexing_error = getattr(err, "user_friendly_message", str(err))
+                if st.session_state.vector_store is not None:
+                    try:
+                        st.session_state.vector_store.delete()
+                    except Exception:
+                        pass
+                    st.session_state.vector_store = None
+
+                st.error(f"Processing Error: {st.session_state.indexing_error}")
+                if st.session_state.chunk_records:
+                    done_count = sum(1 for c in st.session_state.chunk_records if c.embedding is not None)
+                    tot_count = len(st.session_state.chunk_records)
+                    if done_count > 0:
+                        st.info(
+                            f"📌 **Partial Progress Preserved:** {done_count} of {tot_count} chunks embedded and retained in memory. "
+                            "Text extraction is intact. Use 'Resume Indexing' above to continue."
+                        )
             except Exception as err:
                 logger.critical("Unexpected pipeline crash: %s", str(err), exc_info=True)
                 st.error("An unexpected error occurred during report processing.")
@@ -1249,7 +1330,19 @@ def main() -> None:
             indexing = st.session_state.indexing_result
             total_chars = ingestion.total_characters if ingestion else 0
 
-            indexed_status = "Active Ephemeral ChromaDB Collection" if st.session_state.is_indexed else "Paused (No API Key)"
+            if st.session_state.is_indexed:
+                indexed_status = "Active Ephemeral ChromaDB Collection"
+            elif chunks:
+                embedded_cnt = sum(1 for c in chunks if c.embedding is not None)
+                if 0 < embedded_cnt < len(chunks):
+                    indexed_status = f"Incomplete ({embedded_cnt}/{len(chunks)} chunks embedded in memory)"
+                elif not config.has_api_key:
+                    indexed_status = "Paused (No API Key)"
+                else:
+                    indexed_status = "Pending Vector Indexing"
+            else:
+                indexed_status = "Paused (No API Key)" if not config.has_api_key else "Not Indexed"
+
             collection_label = indexing.collection_name if indexing else "None"
             emb_model = indexing.embedding_model if indexing else config.gemini_embedding_model
             emb_dim = indexing.embedding_dimension if indexing else config.embedding_dimension
@@ -1267,6 +1360,9 @@ def main() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
+            if st.session_state.indexing_error and not st.session_state.is_indexed:
+                st.warning(f"**Indexing Status Notice:** {st.session_state.indexing_error}")
 
             # Display Ingestion Warnings if any
             if meta.warnings:
@@ -1343,11 +1439,11 @@ def main() -> None:
             st.markdown(
                 f"""
                 <div class="kpi-metric-box">
-                    <div class="kpi-title">Ingestion & Processing Limits</div>
+                    <div class="kpi-title">Ingestion & Rate Limits</div>
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
-                        Max Size: <strong>{config.max_upload_mb} MB</strong><br/>
-                        Max Pages: <strong>{config.max_pdf_pages} pages</strong><br/>
-                        Retrieval Top-K: <strong>{config.retrieval_top_k} passages</strong>
+                        Max Size: <strong>{config.max_upload_mb} MB</strong> ({config.max_pdf_pages} pages)<br/>
+                        Token Pacer: <strong>{config.embedding_tpm_limit:,} TPM</strong> ({int(config.embedding_safety_margin * 100)}% margin)<br/>
+                        Request Rate: <strong>{config.embedding_rpm_limit} RPM</strong> (Top-K: {config.retrieval_top_k})
                     </div>
                 </div>
                 """,

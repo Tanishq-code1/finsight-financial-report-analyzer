@@ -24,7 +24,7 @@ if str(_REPO_ROOT) not in sys.path:
 from financial_report_analyzer.config import load_config
 from financial_report_analyzer.pdf_loader import load_pdf
 from financial_report_analyzer.chunker import chunk_pages
-from financial_report_analyzer.embedding_service import EmbeddingService
+from financial_report_analyzer.embedding_service import EmbeddingService, TokenPacer
 from financial_report_analyzer.vector_store import VectorStore
 from financial_report_analyzer.rag import RAGService
 from financial_report_analyzer.citation_validator import CitationValidator
@@ -176,7 +176,8 @@ class BenchmarkRunner:
         fake_client = FakeGenAIClient()
 
         # Setup services
-        embedding_service = EmbeddingService(config=self.config, client=fake_client)
+        eval_pacer = TokenPacer(sleeper=lambda _: None) if self.mode == "offline" else None
+        embedding_service = EmbeddingService(config=self.config, client=fake_client, pacer=eval_pacer)
         rag_service = RAGService(config=self.config, client=fake_client)
 
         # Ingestion & Indexing

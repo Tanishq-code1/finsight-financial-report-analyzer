@@ -372,8 +372,12 @@ class FakeEmbeddingModelsNamespace:
     def __init__(self, dimension: int = 768):
         self.dimension = dimension
 
-    def embed_content(self, model: str, contents: str, config: Optional[Dict[str, Any]] = None) -> FakeEmbeddingResponse:
+    def embed_content(self, model: str, contents: Union[str, List[str]], config: Optional[Dict[str, Any]] = None) -> FakeEmbeddingResponse:
         dim = config.get("output_dimensionality", self.dimension) if config else self.dimension
+        if isinstance(contents, list):
+            resp = FakeEmbeddingResponse([])
+            resp.embeddings = [FakeEmbeddingResponseItem(generate_deterministic_embedding(c, dimension=dim)) for c in contents]
+            return resp
         vec = generate_deterministic_embedding(contents, dimension=dim)
         return FakeEmbeddingResponse(vec)
 
