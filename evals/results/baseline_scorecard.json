@@ -1,0 +1,295 @@
+{
+  "run_id": "run_20261023_131125_018ec6",
+  "started_at_utc": "2026-10-23T13:11:25.341883+00:00",
+  "completed_at_utc": "2026-10-23T13:11:25.922616+00:00",
+  "dataset_version": "1.0.0",
+  "git_commit": "3bbf2fdc5031",
+  "app_version": "0.1.0",
+  "mode": "offline",
+  "configuration": {
+    "embedding_model": "gemini-embedding-2",
+    "embedding_dimension": 768,
+    "generation_model": "gemini-3.8-flash",
+    "retrieval_top_k": 5,
+    "dataset_version": "1.0.0"
+  },
+  "case_summary": {
+    "total": 110,
+    "executed": 110,
+    "passed": 110,
+    "failed": 0,
+    "skipped": 0
+  },
+  "category_counts": {
+    "qa_cases": 30,
+    "retrieval_cases": 20,
+    "financial_extraction_cases": 22,
+    "risk_outlook_cases": 12,
+    "calculation_cases": 16,
+    "abstention_cases": 10
+  },
+  "metrics": {
+    "retrieval_recall_at_5": {
+      "numerator": 20.0,
+      "denominator": 20.0,
+      "value": 1.0
+    },
+    "retrieval_precision_at_5": {
+      "numerator": 4.2,
+      "denominator": 20.0,
+      "value": 0.21000000000000002
+    },
+    "retrieval_mrr": {
+      "numerator": 17.666666666666668,
+      "denominator": 20.0,
+      "value": 0.8833333333333334
+    },
+    "page_provenance_accuracy": {
+      "numerator": 73.0,
+      "denominator": 73.0,
+      "value": 1.0
+    },
+    "qa_factual_accuracy": {
+      "numerator": 30.0,
+      "denominator": 30.0,
+      "value": 1.0
+    },
+    "citation_precision": {
+      "metric_name": "citation_precision",
+      "numerator": 30.0,
+      "denominator": 30.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "citation_page_accuracy": {
+      "metric_name": "citation_page_accuracy",
+      "numerator": 30.0,
+      "denominator": 30.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "citation_quote_accuracy": {
+      "metric_name": "citation_quote_accuracy",
+      "numerator": 30.0,
+      "denominator": 30.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "citation_numeric_accuracy": {
+      "metric_name": "citation_numeric_accuracy",
+      "numerator": 30.0,
+      "denominator": 30.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "abstention_accuracy": {
+      "metric_name": "correct_abstention_rate",
+      "numerator": 10.0,
+      "denominator": 10.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "false_answer_rate": {
+      "metric_name": "false_answer_rate",
+      "numerator": 0.0,
+      "denominator": 10.0,
+      "value": 0.0,
+      "is_defined": true,
+      "note": null
+    },
+    "answer_rate": {
+      "metric_name": "answer_rate",
+      "numerator": 30.0,
+      "denominator": 30.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "unnecessary_abstention_rate": {
+      "metric_name": "unnecessary_abstention_rate",
+      "numerator": 0.0,
+      "denominator": 30.0,
+      "value": 0.0,
+      "is_defined": true,
+      "note": null
+    },
+    "numeric_calculation_accuracy": {
+      "metric_name": "numeric_calculation_accuracy",
+      "numerator": 12.0,
+      "denominator": 12.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "withheld_calculation_accuracy": {
+      "metric_name": "withheld_calculation_accuracy",
+      "numerator": 4.0,
+      "denominator": 4.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "metric_exact_match_rate": {
+      "metric_name": "metric_exact_match_rate",
+      "numerator": 22.0,
+      "denominator": 22.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "numeric_value_accuracy": {
+      "metric_name": "numeric_value_accuracy",
+      "numerator": 22.0,
+      "denominator": 22.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "currency_accuracy": {
+      "metric_name": "currency_accuracy",
+      "numerator": 22.0,
+      "denominator": 22.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "unit_scale_accuracy": {
+      "metric_name": "unit_scale_accuracy",
+      "numerator": 22.0,
+      "denominator": 22.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "source_page_accuracy": {
+      "metric_name": "source_page_accuracy",
+      "numerator": 22.0,
+      "denominator": 22.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "risk_precision": {
+      "metric_name": "risk_precision",
+      "numerator": 6.0,
+      "denominator": 6.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "risk_recall": {
+      "metric_name": "risk_recall",
+      "numerator": 6.0,
+      "denominator": 6.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "risk_f1": {
+      "metric_name": "risk_f1",
+      "numerator": 6.0,
+      "denominator": 6.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "outlook_precision": {
+      "metric_name": "outlook_precision",
+      "numerator": 6.0,
+      "denominator": 6.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "outlook_recall": {
+      "metric_name": "outlook_recall",
+      "numerator": 6.0,
+      "denominator": 6.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "outlook_f1": {
+      "metric_name": "outlook_f1",
+      "numerator": 6.0,
+      "denominator": 6.0,
+      "value": 1.0,
+      "is_defined": true,
+      "note": null
+    },
+    "export_data_fidelity": {
+      "numerator": 1.0,
+      "denominator": 1.0,
+      "value": 1.0
+    }
+  },
+  "quality_gates": {
+    "overall_status": "PASSED",
+    "is_provisional": true,
+    "results": {
+      "numeric_calculation_accuracy": {
+        "target": 1.0,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "100% exact Decimal calculation accuracy on eligible deterministic gold cases"
+      },
+      "citation_precision": {
+        "target": 0.95,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "At least 95% valid citations on tested gold cases"
+      },
+      "citation_page_accuracy": {
+        "target": 1.0,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "100% accurate page provenance for verified citations"
+      },
+      "abstention_accuracy": {
+        "target": 0.95,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "At least 95% correct abstention rate on unanswerable/unsupported cases"
+      },
+      "metric_exact_match_rate": {
+        "target": 0.9,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "At least 90% exact metric and period match rate on gold assertions"
+      },
+      "retrieval_recall_at_5": {
+        "target": 0.85,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "At least 85% Recall@5 on eligible labelled retrieval cases"
+      },
+      "export_data_fidelity": {
+        "target": 1.0,
+        "actual": 1.0,
+        "comparison": "gte",
+        "status": "PASS",
+        "description": "100% round-trip fidelity and formula-injection defense on exports"
+      }
+    }
+  },
+  "failures": [],
+  "latency_summary": {
+    "total_elapsed_seconds": 0.58
+  },
+  "warnings": [
+    "Offline deterministic evaluation using synthetic financial reports and local fake embedding vectors.",
+    "Quality gates are provisional engineering targets rather than verified industry certifications.",
+    "Not investment advice: FinSight is an informational research aid."
+  ]
+}

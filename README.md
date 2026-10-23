@@ -14,7 +14,8 @@ A modular, source-grounded Financial Report Analyzer that ingests annual (10-K) 
 6. **Verifiable Citations**: Every factual claim is traceable to a specific chunk and page, accompanied by verified source excerpts.
 7. **Structured Financial Intelligence**: Extracts reported financial metrics (Revenue, Operating Income, Net Income, Cash Flow, Capex, Cash, Debt, EPS) without inventing figures. Missing metrics are never represented as zero.
 8. **Disclosed Risks & Management Outlook**: Separates factual risk disclosures and forward-looking guidance from model speculation.
-9. **Multi-Format Exports**: Download results in JSON, CSV, or Markdown formats.
+9. **Multi-Format Exports**: Download results in JSON, CSV, or Markdown formats with CSV formula injection defense.
+10. **Reproducible Evaluation Benchmark**: 110-case versioned gold dataset (1.0.0) measuring retrieval Recall@k, MRR, citation precision, evidence abstention, Decimal arithmetic, and export fidelity.
 
 ---
 
@@ -173,6 +174,38 @@ set GEMINI_API_KEY=your_actual_key
 # Run live smoke test:
 .venv\Scripts\python -m pytest tests/test_embedding_service.py -k test_live_gemini_embedding_smoke -v
 ```
+
+---
+
+## Evaluation Benchmark & Quality Scorecard
+
+FinSight includes a reproducible, versioned evaluation benchmark (`evals/`) that measures retrieval, source-grounded QA, citation faithfulness, abstention, financial arithmetic, and export integrity:
+
+### 1. Run Offline Evaluation
+Runs the complete 110-assertion gold dataset offline without requiring an API key or network connectivity:
+
+```bash
+.venv\Scripts\python -m evals.runner
+```
+
+### 2. Save Benchmark Baseline
+```bash
+.venv\Scripts\python -m evals.runner --save-baseline evals/results/baseline_scorecard.json
+```
+
+### 3. Compare Against Baseline (Regression Detection)
+```bash
+.venv\Scripts\python -m evals.runner --compare evals/results/baseline_scorecard.json
+```
+
+### 4. Optional Live Evaluation
+```bash
+set RUN_LIVE_EVALS=1
+set GEMINI_API_KEY=your_actual_key
+.venv\Scripts\python -m evals.runner --mode live
+```
+
+Detailed methodology, metric definitions, and provisional quality gates are documented in [`evals/README.md`](evals/README.md).
 
 ---
 

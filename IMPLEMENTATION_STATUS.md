@@ -1,8 +1,8 @@
 # Implementation Status — Financial Report Analyzer
 
 ## Active Phase
-- Current Phase: **Phase 6 Complete (Multi-Format Exports, Export Validation, and Usability Polish)**
-- Next Phase: **Phase 7 (Evaluation & Benchmark)**
+- Current Phase: **Phase 7 Complete (Evaluation Benchmark, Gold Dataset, and Quality Scorecard)**
+- Next Phase: **Phase 8 (Deployment & Hardening)**
 
 ## Completed Items
 1. **Repository & Architecture**: Modular layout under `financial-report-analyzer`.
@@ -64,14 +64,21 @@
     - Path traversal and forbidden filename character sanitization (`sanitize_export_filename`).
     - In-memory Streamlit download center in Overview, Metrics, and Risks/Outlook tabs without disk writes or external API re-invocations.
 16. **Test Coverage**:
-    - 116 tests total (115 passing offline, 1 opt-in skipped live smoke test).
-    - Comprehensive test suites in `tests/test_export_service.py` and `tests/test_export_validation.py`.
-    - 100% pass rate with zero network access required for standard test suite.
+    - 135 tests total (134 passing offline, 1 opt-in skipped live smoke test).
+    - Comprehensive unit and integration test coverage across all pipeline modules and evaluation framework.
+17. **Evaluation Benchmark Framework**: `evals/`:
+    - Versioned gold dataset (`dataset_version: "1.0.0"`) with 110 assertions across 3 synthetic filings (`doc_synth_apex_10k`, `doc_synth_nexawave_10q`, `doc_synth_solaria_annual`).
+    - Deterministic fake clients and PyMuPDF synthetic PDF fixtures (`fixtures.py`).
+    - Mathematical metrics for retrieval, citations, abstention, arithmetic, and exports (`metrics.py`).
+    - CLI runner (`runner.py`) with baseline comparison (`--compare`) and baseline saving (`--save-baseline`).
+    - Configurable quality gates (`gates.json`) passing 100% with zero failures.
 
 ## Verification & Checks
 - **Test Command**: `.venv\Scripts\python -m pytest tests -v`
-- **Result**: 115 passed, 1 skipped in 11.79s.
+- **Result**: 134 passed, 1 skipped in 9.01s.
+- **Benchmark Command**: `.venv\Scripts\python -m evals.runner`
+- **Benchmark Result**: 110 passed, 0 failed, 100% gates passed.
 - **App Launch Check**: `python -m py_compile app.py` succeeded with 0 errors.
 
 ## Next Action
-- Implement **Phase 7**: Evaluation and benchmark suite with golden evaluation dataset, retrieval precision/recall@k, and citation faithfulness benchmarks.
+- Implement **Phase 8**: Production deployment readiness, security hardening, and release packaging.

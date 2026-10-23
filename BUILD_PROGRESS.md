@@ -1,7 +1,7 @@
 # Build Progress — Financial Report Analyzer (FinSight)
 
 Last Updated: 2026-10-23
-Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5 & Phase 6 Complete**
+Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6 & Phase 7 Complete**
 
 ---
 
@@ -166,9 +166,34 @@ Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5 & Phase 6
   - `tests/test_export_validation.py`: 5 validation tests covering type checking rejection, JSON round-trip fidelity, CSV round-trip fidelity with `csv.DictReader`, secret leakage prevention, and Markdown table structure preservation.
   - `tests/test_ui_smoke.py`: Updated to verify `export_service` module imports.
 
-### Phase 7: Evaluation & Benchmark *(Next Phase)*
-- [ ] Curated gold evaluation question set.
-- [ ] Precision, recall@k, and citation validity scoring.
+### Phase 7: Evaluation Benchmark, Gold Dataset & Quality Scorecard
+- [x] Create versioned gold evaluation dataset (version `1.0.0`) under `evals/dataset/`:
+  - 3 independently constructed synthetic filings: Apex 10-K (FY2024), NexaWave 10-Q (Q3 FY2025), and Solaria Annual Report (FY2024).
+  - 110 test assertions total: 30 Q&A cases, 20 retrieval cases, 22 financial metric extractions, 12 risk/outlook disclosures, 16 Decimal calculations, and 10 abstention/adversarial cases.
+- [x] Implement deterministic synthetic fixtures & fake clients (`fixtures.py`):
+  - Programmatic generation of 3 synthetic PDFs with PyMuPDF exercising sparse pages, multi-currency disclosures, turnaround financials, and prompt injection attacks.
+  - Deterministic fake embedding and structured generation clients enabling 100% offline, zero-network, zero-cost, reproducible evaluation.
+- [x] Pure mathematical evaluation metrics (`metrics.py`):
+  - Retrieval: Recall@k, Precision@k, MRR, and page provenance accuracy.
+  - Citation Quality: Citation precision, citation page accuracy, quote accuracy, and numeric support accuracy.
+  - Abstention: Correct abstention rate, false answer rate, answer rate, and unnecessary abstention rate.
+  - Arithmetic: Strict Decimal calculation accuracy and properly withheld rates.
+  - Extraction: Metric and period match rate, numeric accuracy, currency/unit accuracy.
+  - Export: JSON schema 1.0.0 round-trip fidelity, CSV formula injection defense, and Markdown table integrity.
+- [x] Benchmark Runner CLI (`runner.py`):
+  - Command-line runner (`.venv\Scripts\python -m evals.runner`) executing all 110 assertions in ~0.5 seconds offline.
+  - Support for saving baselines (`--save-baseline`) and regression detection diffs (`--compare`).
+- [x] Scorecard Reporting (`report.py`):
+  - Formatted Terminal summary, JSON scorecard, and GitHub-flavored Markdown scorecard.
+  - Diagnostic failure tracking with case IDs, category breakdowns, and explicit disclaimers.
+- [x] Configurable Provisional Quality Gates (`gates.json`):
+  - 100% of provisional targets passed on baseline run.
+- [x] Comprehensive test coverage:
+  - `tests/test_evaluation_dataset.py`: 8 tests.
+  - `tests/test_evaluation_metrics.py`: 6 tests.
+  - `tests/test_evaluation_runner.py`: 2 tests.
+  - `tests/test_evaluation_scorecard.py`: 4 tests.
+  - Full suite: 134 passed, 1 skipped in ~9.0s.
 
 ### Phase 8: Deployment & Hardening *(Final Phase)*
 - [ ] Streamlit Community Cloud readiness verification.
@@ -190,30 +215,34 @@ platform win32 -- Python 3.13.2, pytest-9.1.1, pluggy-1.7.0
 rootdir: C:\Users\shubh\Downloads\Project-anti\financial-report-analyzer
 configfile: pyproject.toml
 plugins: anyio-4.15.1, mock-3.17.0
-collected 116 items
+collected 135 items
 
-tests\test_chunker.py .........                                          [  7%]
-tests\test_citation_validator.py .........                               [ 15%]
-tests\test_config.py ....                                                [ 18%]
-tests\test_embedding_service.py ........s                                [ 26%]
-tests\test_export_service.py .........                                   [ 34%]
-tests\test_export_validation.py .....                                    [ 38%]
-tests\test_financial_analysis_pipeline.py ....                           [ 42%]
-tests\test_financial_calculations.py ..............                      [ 54%]
-tests\test_financial_extractor.py .....                                  [ 58%]
-tests\test_indexing_pipeline.py ...                                      [ 61%]
-tests\test_pdf_loader.py ...............                                 [ 74%]
-tests\test_rag.py .............                                          [ 85%]
-tests\test_schemas.py ........                                           [ 92%]
-tests\test_ui_smoke.py ...                                               [ 94%]
+tests\test_chunker.py .........                                          [  6%]
+tests\test_citation_validator.py .........                               [ 13%]
+tests\test_config.py ....                                                [ 16%]
+tests\test_embedding_service.py ........s                                [ 22%]
+tests\test_evaluation_dataset.py ........                                [ 28%]
+tests\test_evaluation_metrics.py ......                                  [ 33%]
+tests\test_evaluation_runner.py ..                                       [ 34%]
+tests\test_evaluation_scorecard.py ...                                   [ 37%]
+tests\test_export_service.py .........                                   [ 43%]
+tests\test_export_validation.py .....                                    [ 47%]
+tests\test_financial_analysis_pipeline.py ....                           [ 50%]
+tests\test_financial_calculations.py ..............                      [ 60%]
+tests\test_financial_extractor.py .....                                  [ 64%]
+tests\test_indexing_pipeline.py ...                                      [ 66%]
+tests\test_pdf_loader.py ...............                                 [ 77%]
+tests\test_rag.py .............                                          [ 87%]
+tests\test_schemas.py ........                                           [ 93%]
+tests\test_ui_smoke.py ...                                               [ 95%]
 tests\test_vector_store.py ......                                        [100%]
 
 =========================== short test summary info ===========================
 SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-in. Set RUN_LIVE_GEMINI_TESTS=1 and GEMINI_API_KEY to execute.
-======================= 115 passed, 1 skipped in 11.79s =======================
+======================= 134 passed, 1 skipped in 9.01s =========================
 ```
 
-- **Pass Rate:** 115 passed, 1 opt-in live test skipped (100% passing offline).
+- **Pass Rate:** 134 passed, 1 opt-in live test skipped (100% passing offline).
 - **Static Compilation:** `python -m py_compile app.py` passed with 0 errors.
 - **Dependency Imports:** Verified with Python 3.13.2.
 
@@ -225,7 +254,7 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 ---
 
 ## 5. Next Steps
-- Proceed with **Phase 7 (Evaluation & Benchmark)**:
-  - Curate golden evaluation dataset covering 10-K and 10-Q reports.
-  - Benchmark retrieval precision and recall@k.
-  - Benchmark citation faithfulness and numerical verification.
+- Proceed with **Phase 8 (Deployment, Security Hardening & Release)**:
+  - Streamlit Community Cloud readiness verification.
+  - Deployment configuration (`.streamlit/config.toml`, secrets manager guidelines).
+  - Final end-to-end security audit and release packaging.

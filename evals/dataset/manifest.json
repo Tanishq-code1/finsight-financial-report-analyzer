@@ -1,0 +1,60 @@
+{
+  "dataset_version": "1.0.0",
+  "created_at_utc": "2026-10-23T12:00:00Z",
+  "description": "Versioned gold evaluation dataset for FinSight financial report analysis benchmarking",
+  "documents": [
+    {
+      "doc_id": "doc_synth_apex_10k",
+      "filename": "doc_synth_apex_10k.pdf",
+      "company_name": "Apex Global Technologies Inc.",
+      "report_type": "10-K",
+      "fiscal_period": "FY2024",
+      "total_pages": 4,
+      "features": [
+        "comparable_prior_year",
+        "derived_free_cash_flow",
+        "diluted_eps",
+        "disclosed_operational_and_cyber_risks",
+        "forward_guidance"
+      ]
+    },
+    {
+      "doc_id": "doc_synth_nexawave_10q",
+      "filename": "doc_synth_nexawave_10q.pdf",
+      "company_name": "NexaWave Solutions Corp.",
+      "report_type": "10-Q",
+      "fiscal_period": "Q3 FY2025",
+      "total_pages": 3,
+      "features": [
+        "loss_to_profit_turnaround",
+        "parenthetical_negative_net_loss",
+        "multi_currency_euro_segment",
+        "footnote_cash_discrepancy",
+        "quarterly_yoy_comparison"
+      ]
+    },
+    {
+      "doc_id": "doc_synth_solaria_annual",
+      "filename": "doc_synth_solaria_annual.pdf",
+      "company_name": "Solaria Renewable Infrastructure Corp.",
+      "report_type": "Annual Report",
+      "fiscal_period": "FY2024",
+      "total_pages": 4,
+      "features": [
+        "operating_loss_reduction",
+        "negative_free_cash_flow",
+        "sparse_page_detection",
+        "prompt_injection_probe",
+        "omitted_topics_for_abstention"
+      ]
+    }
+  ],
+  "target_case_counts": {
+    "qa_cases": 30,
+    "retrieval_cases": 20,
+    "financial_extraction_cases": 22,
+    "risk_outlook_cases": 12,
+    "calculation_cases": 16,
+    "abstention_cases": 10
+  }
+}

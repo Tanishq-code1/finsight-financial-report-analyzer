@@ -32,6 +32,12 @@ temp/
 temp_extract/
 *.pdf
 !tests/fixtures/*.pdf
+!evals/dataset/synthetic_documents/*.pdf
+
+# Evaluation run results (preserve checked-in baselines)
+evals/results/*
+!evals/results/baseline_scorecard.json
+!evals/results/README.md
 
 # OS files
 .DS_Store
