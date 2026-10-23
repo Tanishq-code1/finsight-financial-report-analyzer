@@ -17,6 +17,7 @@ class AppConfig:
     gemini_api_key: Optional[str]
     gemini_generation_model: str
     gemini_embedding_model: str
+    embedding_dimension: int
     max_upload_mb: int
     max_pdf_pages: int
     chunk_size_tokens: int
@@ -46,6 +47,11 @@ def load_config() -> AppConfig:
 
     generation_model = os.getenv("GEMINI_GENERATION_MODEL", "gemini-2.5-flash").strip()
     embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2").strip()
+
+    try:
+        embedding_dimension = int(os.getenv("GEMINI_EMBEDDING_DIMENSION", "768"))
+    except ValueError:
+        embedding_dimension = 768
 
     try:
         max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "25"))
@@ -85,6 +91,7 @@ def load_config() -> AppConfig:
         gemini_api_key=api_key,
         gemini_generation_model=generation_model,
         gemini_embedding_model=embedding_model,
+        embedding_dimension=embedding_dimension,
         max_upload_mb=max_upload_mb,
         max_pdf_pages=max_pdf_pages,
         chunk_size_tokens=chunk_size_tokens,

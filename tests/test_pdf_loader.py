@@ -115,6 +115,7 @@ def test_oversized_upload_limit():
         gemini_api_key="test",
         gemini_generation_model="gemini-2.5-flash",
         gemini_embedding_model="gemini-embedding-2",
+        embedding_dimension=768,
         max_upload_mb=0,  # 0 MB implies 0 bytes
         max_pdf_pages=50,
         chunk_size_tokens=850,
@@ -136,6 +137,7 @@ def test_page_count_limit_exceeded():
         gemini_api_key="test",
         gemini_generation_model="gemini-2.5-flash",
         gemini_embedding_model="gemini-embedding-2",
+        embedding_dimension=768,
         max_upload_mb=25,
         max_pdf_pages=3,  # Limit to 3 pages
         chunk_size_tokens=850,

@@ -1,7 +1,7 @@
 # Build Progress — Financial Report Analyzer (FinSight)
 
 Last Updated: 2026-10-23
-Current Status: **Phase 0, Phase 1 & Phase 2 Complete**
+Current Status: **Phase 0, Phase 1, Phase 2 & Phase 3 Complete**
 
 ---
 
@@ -14,7 +14,7 @@ Current Status: **Phase 0, Phase 1 & Phase 2 Complete**
 | Executive Summary | 12-page PDF attached | Inspected & reviewed | Architectural principles applied |
 | Starter Code | Expected in ZIP archive | Blueprint documents only | Clean modular structure created from scratch |
 | Project Root | `financial-report-analyzer` | Established within workspace | Configured with virtual environment |
-| Embedding Model | Originally `text-embedding-004` (shut down Jan 2026) | Replaced with active model | Updated to `gemini-embedding-2` |
+| Embedding Model | Originally `text-embedding-004` (shut down Jan 2026) | Replaced with active model | Updated to `gemini-embedding-2` (768D) |
 
 ---
 
@@ -58,13 +58,29 @@ Current Status: **Phase 0, Phase 1 & Phase 2 Complete**
 - [x] Update embedding model configuration to `gemini-embedding-2` across `config.py`, `.env.example`, and test suites.
 - [x] Create comprehensive synthetic PDF test suite in `tests/test_pdf_loader.py` (covering 15 test scenarios).
 
-### Phase 3: Chunking, Embeddings & Ephemeral Vector Index *(Next Phase)*
-- [ ] Implement section- and sentence-aware chunker retaining 1-based page numbers and chunk IDs.
-- [ ] Integrate Google GenAI SDK for `gemini-embedding-2` vectors.
-- [ ] Implement ephemeral session-isolated ChromaDB client.
-- [ ] Add retrieval diagnostics and cross-session isolation tests.
+### Phase 3: Chunking, Embeddings & Ephemeral Vector Index
+- [x] Implement sentence-aware, page-scoped chunker (`chunker.py`) with deterministic token estimation (~4 chars/token).
+- [x] Preserve exact 1-based page provenance in each chunk (`chunk.page_numbers = [page.page_number]`).
+- [x] Handle tables, numbers, currency symbols, and abbreviations (`Inc.`, `U.S.`) without splitting sentences inappropriately.
+- [x] Implement Google GenAI embedding service (`embedding_service.py`) supporting `gemini-embedding-2`:
+  - Formats asymmetric text (`title: <doc> | text: <chunk>` and `task: question answering | query: <q>`).
+  - Individual synchronous calls per chunk to prevent input aggregation.
+  - 768-dimensional vector validation.
+  - Bounded exponential backoff for retriable errors (429, 503) and immediate failure for permanent errors (400, 401, 403).
+- [x] Implement ephemeral session-isolated ChromaDB client (`vector_store.py`):
+  - Cosine distance (`hnsw:space: cosine`).
+  - Precomputed vector storage without invoking default embeddings.
+  - Unique unpredictable collection naming per document session.
+  - Verified cross-session isolation.
+- [x] Implement indexing orchestration pipeline (`indexing_pipeline.py`) with progress callbacks and rollback on failure.
+- [x] Integrate Phase 3 into Streamlit (`app.py`):
+  - Added semantic-search diagnostic UI in "Ask the Report" tab.
+  - Displays retrieved passages, ranks, page badges, cosine distance, and similarity metrics.
+  - Added chunk breakdown table and vector indexing status in "Sources & Processing" tab.
+  - Reset action deletes Chroma collection and clears index state.
+- [x] Build comprehensive unit tests (56 passing, 1 opt-in skipped live smoke test).
 
-### Phase 4: Grounded Q&A & Citation Validation *(Upcoming)*
+### Phase 4: Grounded Q&A & Citation Validation *(Next Phase)*
 - [ ] Strict RAG query pipeline with Gemini Flash model.
 - [ ] Verifiable citation extraction and substring verification.
 - [ ] Abstention on unanswerable/out-of-scope questions.
@@ -103,30 +119,34 @@ platform win32 -- Python 3.13.2, pytest-9.1.1, pluggy-1.7.0
 rootdir: c:\Users\shubh\Downloads\Project-anti\financial-report-analyzer
 configfile: pyproject.toml
 plugins: anyio-4.15.1, mock-3.17.0
-collected 30 items
+collected 57 items
 
-financial-report-analyzer\tests\test_config.py ....                      [ 13%]
-financial-report-analyzer\tests\test_pdf_loader.py ...............       [ 63%]
-financial-report-analyzer\tests\test_schemas.py ........                 [ 90%]
-financial-report-analyzer\tests\test_ui_smoke.py ...                     [100%]
+financial-report-analyzer\tests\test_chunker.py .........                [ 15%]
+financial-report-analyzer\tests\test_config.py ....                      [ 22%]
+financial-report-analyzer\tests\test_embedding_service.py ........s      [ 38%]
+financial-report-analyzer\tests\test_indexing_pipeline.py ...            [ 43%]
+financial-report-analyzer\tests\test_pdf_loader.py ...............       [ 70%]
+financial-report-analyzer\tests\test_schemas.py ........                 [ 84%]
+financial-report-analyzer\tests\test_ui_smoke.py ...                     [ 89%]
+financial-report-analyzer\tests\test_vector_store.py ......              [100%]
 
-============================= 30 passed in 6.10s ==============================
+======================== 56 passed, 1 skipped in 11.49s =======================
 ```
 
-- **Pass Rate:** 30 passed / 30 total (100%)
+- **Pass Rate:** 56 passed, 1 opt-in live test skipped (100% passing offline).
 - **Static Compilation:** `python -m py_compile app.py` passed with 0 errors.
 - **Dependency Imports:** Verified with Python 3.13.2.
 
 ---
 
 ## 4. Known Issues & Blockers
-- None. Binary PyMuPDF 2.0 wheel performs in-memory extraction on Windows with zero disk writes.
+- None. Ephemeral Chroma collections and Google GenAI SDK function with full session isolation in-memory.
 
 ---
 
 ## 5. Next Steps
-- Proceed with **Phase 3 (Chunking, Embeddings, and Ephemeral Vector Retrieval)**:
-  - Create `src/financial_report_analyzer/chunking.py`.
-  - Create `src/financial_report_analyzer/embeddings.py` using `gemini-embedding-2`.
-  - Create `src/financial_report_analyzer/vector_store.py` using ephemeral ChromaDB client.
-  - Implement cross-session isolation and retrieval unit tests.
+- Proceed with **Phase 4 (Grounded Question Answering and Citation Validation)**:
+  - Create `src/financial_report_analyzer/rag.py`.
+  - Wire prompts in `prompts/qa_system.txt`.
+  - Validate citation chunk IDs, page numbers, and quote substrings against retrieved passages.
+  - Enforce explicit abstention when evidence is insufficient.

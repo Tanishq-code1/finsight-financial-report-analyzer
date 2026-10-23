@@ -7,12 +7,14 @@ A modular, source-grounded Financial Report Analyzer that ingests annual (10-K) 
 ## Key Features
 
 1. **Page-Aware Document Ingestion**: In-memory parsing via PyMuPDF with 1-based page index preservation and scan detection.
-2. **Session-Isolated Ephemeral Vector Store**: Ephemeral ChromaDB indexing per user session; no global cross-user document leakage.
-3. **Strictly Grounded RAG Q&A**: Answers questions solely from retrieved passages, with defense against embedded prompt injections.
-4. **Verifiable Citations**: Every factual claim is traceable to a specific chunk and page, accompanied by verified source excerpts.
-5. **Structured Financial Intelligence**: Extracts reported financial metrics (Revenue, Operating Income, Net Income, Cash Flow, Capex, Cash, Debt, EPS) without inventing figures. Missing metrics are never represented as zero.
-6. **Disclosed Risks & Management Outlook**: Separates factual risk disclosures and forward-looking guidance from model speculation.
-7. **Multi-Format Exports**: Download results in JSON, CSV, or Markdown formats.
+2. **Page-Scoped Sentence-Aware Chunking**: Splits text along sentence and paragraph boundaries (~850 target tokens, 120 overlap) while keeping chunks strictly within their source page for unambiguous citation provenance.
+3. **Session-Isolated Ephemeral Vector Store**: Ephemeral ChromaDB indexing per active user session; no global cross-user document leakage.
+4. **Google GenAI Embeddings**: Embeds chunks and search queries using Google's `gemini-embedding-2` model (768-dimensional vectors) with asymmetric retrieval prefixes (`title: ... | text: ...` and `task: question answering | query: ...`).
+5. **Strictly Grounded RAG Q&A**: Answers questions solely from retrieved passages, with defense against embedded prompt injections (Phase 4).
+6. **Verifiable Citations**: Every factual claim is traceable to a specific chunk and page, accompanied by verified source excerpts.
+7. **Structured Financial Intelligence**: Extracts reported financial metrics (Revenue, Operating Income, Net Income, Cash Flow, Capex, Cash, Debt, EPS) without inventing figures. Missing metrics are never represented as zero.
+8. **Disclosed Risks & Management Outlook**: Separates factual risk disclosures and forward-looking guidance from model speculation.
+9. **Multi-Format Exports**: Download results in JSON, CSV, or Markdown formats.
 
 ---
 
@@ -31,17 +33,17 @@ PDF Parser (PyMuPDF) ─────────────────► Pars
 Page Records (1-based page numbers + text)
         │
         ▼
-Section & Sentence-Aware Chunker (700–1,000 tokens)
+Sentence-Aware Chunker (chunker.py: ~850 target tokens, 120 overlap)
         │
         ▼
-Embedding Service (Google GenAI: text-embedding-004)
+Embedding Service (embedding_service.py: Google GenAI gemini-embedding-2)
         │
         ▼
-Session-Isolated Ephemeral ChromaDB Client
+Session-Isolated Ephemeral ChromaDB Client (vector_store.py: cosine metric)
         │
         ├───────────────────────────────┐
         ▼                               ▼
-RAG Question Answering          Structured Extraction Service
+RAG Question Answering (Phase 4) Structured Extraction Service (Phase 5)
         │                               │
         ▼                               ▼
 Retrieve Passages (Top-k)       Pydantic Validation
@@ -91,7 +93,8 @@ Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
    ```dotenv
    GEMINI_API_KEY=your_actual_gemini_api_key
    GEMINI_GENERATION_MODEL=gemini-2.5-flash
-   GEMINI_EMBEDDING_MODEL=text-embedding-004
+   GEMINI_EMBEDDING_MODEL=gemini-embedding-2
+   GEMINI_EMBEDDING_DIMENSION=768
    ```
 
 5. **Run the Streamlit application:**
@@ -109,24 +112,56 @@ All settings can be configured via environment variables or `.streamlit/secrets.
 |---|---|---|
 | `GEMINI_API_KEY` | *None* | Required for AI operations (Embeddings, RAG, Extraction). |
 | `GEMINI_GENERATION_MODEL` | `gemini-2.5-flash` | Gemini model used for synthesis, Q&A, and extraction. |
-| `GEMINI_EMBEDDING_MODEL` | `text-embedding-004` | Model used for vector embeddings. |
+| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-2` | Google embedding model used for vector representations. |
+| `GEMINI_EMBEDDING_DIMENSION` | `768` | Vector dimensionality (768D). |
 | `MAX_UPLOAD_MB` | `25` | Maximum PDF file upload size limit in megabytes. |
 | `MAX_PDF_PAGES` | `250` | Maximum page count allowed per document. |
 | `CHUNK_SIZE_TOKENS` | `850` | Target token length for document chunks. |
-| `CHUNK_OVERLAP_TOKENS` | `120` | Token overlap between consecutive chunks. |
+| `CHUNK_OVERLAP_TOKENS` | `120` | Token overlap between consecutive chunks on a page. |
 | `RETRIEVAL_TOP_K` | `5` | Number of context chunks retrieved per query. |
 | `MIN_EVIDENCE_THRESHOLD` | `0.35` | Minimum cosine relevance score required before abstaining. |
 | `LOG_LEVEL` | `INFO` | Application logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
 ---
 
+## How the In-Memory Vector Store & Isolation Work
+
+- **Ephemeral ChromaDB**: Uses `chromadb.EphemeralClient()` purely in memory. No SQLite files, parquet tables, or vector directories are persisted to disk.
+- **Session Isolation**: Each indexed report generates a unique, unpredictable collection name (e.g., `doc_<digest>_<uuid8>`). Collections are tracked in Streamlit `st.session_state`.
+- **Precomputed Vectors**: Chroma is supplied with explicit precomputed vectors from `EmbeddingService`, completely bypassing any default embedding functions.
+- **Reset Semantics**: Uploading a new document or clicking **Clear Report** immediately invokes `collection.delete()`, removing the ephemeral collection and freeing memory.
+
+---
+
 ## Running Tests
 
-Unit tests are written with `pytest` and mock external API dependencies so tests execute quickly and reliably offline without incurring API billing:
+### Offline Test Suite
+The complete test suite runs offline using synthetic programmatic PDFs and mocked Google GenAI client calls (requires no network connection or API billing):
 
 ```bash
-pytest tests -v
+.venv\Scripts\python -m pytest tests -v
 ```
+
+### Optional Live Integration Smoke Test
+An opt-in smoke test verifies real connectivity with the Google Gemini API when credentials are provided:
+
+```bash
+# Set environment variables:
+set RUN_LIVE_GEMINI_TESTS=1
+set GEMINI_API_KEY=your_actual_key
+
+# Run live smoke test:
+.venv\Scripts\python -m pytest tests/test_embedding_service.py -k test_live_gemini_embedding_smoke -v
+```
+
+---
+
+## Data Retention & Known Limitations
+
+- **Temporary In-Memory Retention**: Extracted text, page records, and Chroma collections reside in Python memory for the duration of the browser session. They are purged upon session clear or browser close.
+- **Re-indexing on Upload**: Because indices are ephemeral, uploading a new file discards the prior collection and builds a fresh index for the active report.
+- **Token Estimation**: Chunker token counting uses a local deterministic heuristic (~4 characters per token). It does not perform a remote API call per candidate chunk.
+- **API Quotas & Rate Limits**: Gemini API calls include bounded exponential backoff (up to 3 retries) for HTTP 429 rate limits and 5xx transient server errors.
 
 ---
 

@@ -1,37 +1,46 @@
 # Implementation Status — Financial Report Analyzer
 
 ## Active Phase
-- Current Phase: **Phase 2 Complete (PDF Ingestion and Page Provenance)**
-- Next Phase: **Phase 3 (Chunking, Embeddings, and Ephemeral Vector Retrieval)**
+- Current Phase: **Phase 3 Complete (Chunking, Embeddings, and Ephemeral Vector Retrieval)**
+- Next Phase: **Phase 4 (Grounded Question Answering and Citation Validation)**
 
 ## Completed Items
 1. **Repository & Architecture**: Modular layout under `financial-report-analyzer`.
-2. **Configuration**: `config.py` updated to use `gemini-embedding-2` as the default embedding model (superseding deprecated `text-embedding-004`).
-3. **Data Schemas**: Pydantic models for `PageRecord`, `ChunkRecord`, `Citation`, `RAGAnswer`, `FinancialMetric`, `RiskItem`, `OutlookItem`, and `ReportAnalysis`.
-4. **PDF Loader**: `src/financial_report_analyzer/pdf_loader.py`:
-   - In-memory stream parsing with PyMuPDF.
-   - Validation for extension, PDF signature (`%PDF-`), file size limits, and page count caps.
-   - Rejection of corrupt, empty, and password-protected PDFs.
-   - Text extraction preserving 1-based page numbers.
-   - Financial text normalization preserving currency symbols (`$`, `€`, `£`, `¥`, `₹`), parenthetical negative values, decimals, tables, and soft-hyphen removal (`\xad` -> `-`).
-   - Diagnostic text density analysis reporting blank pages, sparse pages, and scanned-document warnings.
-   - Deterministic content-based document ID (`doc_<sha256[:12]>`).
-5. **Streamlit Integration**:
-   - PDF upload connected to `load_pdf`.
-   - File size and validation errors surfaced before processing.
-   - Progress spinner during extraction.
-   - Extracted `PageRecord` list and `DocumentMetadata` stored in `st.session_state`.
-   - Extraction warnings and page-by-page table displayed in `Sources & Processing` tab.
-   - `Clear report` button resets all document state cleanly.
-6. **Test Coverage**:
-   - 30 tests in total across `test_config.py`, `test_schemas.py`, `test_pdf_loader.py`, and `test_ui_smoke.py`.
-   - 15 dedicated tests in `test_pdf_loader.py` using synthetic programmatic PDFs.
-   - 100% pass rate.
+2. **Configuration**: `config.py` with `gemini-embedding-2` (768D), `gemini-2.5-flash`, upload caps, and chunk targets.
+3. **Data Schemas**: `schemas.py` contracts for `PageRecord`, `ChunkRecord`, `Citation`, `RAGAnswer`, `FinancialMetric`, `RiskItem`, `OutlookItem`, `ReportAnalysis`, `RetrievalResult`, and `IndexingResult`.
+4. **PDF Loader**: `pdf_loader.py` with PyMuPDF in-memory parsing, 1-based page numbers, financial text normalization, and scan warnings.
+5. **Sentence-Aware Chunker**: `src/financial_report_analyzer/chunker.py`:
+   - Page-scoped chunking retaining 1-based page numbers.
+   - Heuristic token estimation (~4 chars/token).
+   - Sentence/paragraph boundary splitting protecting decimals, abbreviations, and table rows.
+   - Deterministic chunk IDs (`doc_p{page}_c{index}`).
+6. **Google GenAI Embedding Service**: `src/financial_report_analyzer/embedding_service.py`:
+   - Official `google-genai` SDK using `gemini-embedding-2`.
+   - Asymmetric text formatting (`title: ... | text: ...` and `task: question answering | query: ...`).
+   - Individual calls per chunk to prevent input aggregation.
+   - Vector validation (768D, numeric, finite).
+   - Bounded exponential backoff for retriable errors (429, 503).
+7. **Ephemeral ChromaDB Vector Store**: `src/financial_report_analyzer/vector_store.py`:
+   - `chromadb.EphemeralClient()` in-memory collection per active document session.
+   - Cosine distance index (`hnsw:space: cosine`).
+   - Precomputed vector storage without default embeddings.
+   - Semantic retrieval returning typed `RetrievalResult` objects with page provenance and distance/similarity.
+   - Guaranteed session isolation and safe deletion on reset.
+8. **Indexing Pipeline**: `src/financial_report_analyzer/indexing_pipeline.py`:
+   - End-to-end orchestration with progress callbacks and rollback on failure.
+9. **Streamlit UI Integration**: `app.py`:
+   - Full pipeline wired into **Analyze Report**.
+   - Semantic search diagnostic query box with similarity cards and page tags in "Ask the Report" tab.
+   - Detailed chunk breakdown table and vector store statistics in "Sources & Processing" tab.
+   - Complete reset semantics deleting ephemeral Chroma collections.
+10. **Test Coverage**:
+   - 57 tests total (56 passing offline, 1 opt-in skipped live smoke test).
+   - 100% pass rate with zero network access required for standard test suite.
 
 ## Verification & Checks
 - **Test Command**: `.venv\Scripts\python -m pytest tests -v`
-- **Result**: 30 passed in 6.10s.
+- **Result**: 56 passed, 1 skipped in 11.49s.
 - **App Launch Check**: `python -m py_compile app.py` succeeded with 0 errors.
 
 ## Next Action
-- Implement **Phase 3**: Section- and sentence-aware chunking (`chunking.py`), Google GenAI embeddings (`embeddings.py`), and session-isolated ephemeral ChromaDB (`vector_store.py`).
+- Implement **Phase 4**: Grounded RAG Q&A (`rag.py`), prompt construction with retrieved context, structured Pydantic response parsing, verifiable citation validation, and evidence sufficiency abstention.

@@ -11,6 +11,10 @@ def test_core_module_imports():
         "financial_report_analyzer.schemas",
         "financial_report_analyzer.errors",
         "financial_report_analyzer.pdf_loader",
+        "financial_report_analyzer.chunker",
+        "financial_report_analyzer.embedding_service",
+        "financial_report_analyzer.vector_store",
+        "financial_report_analyzer.indexing_pipeline",
     ]
     for mod in modules:
         loaded = importlib.import_module(mod)

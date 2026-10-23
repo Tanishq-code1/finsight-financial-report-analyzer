@@ -158,3 +158,29 @@ class DocumentMetadata(BaseModel):
     warnings: List[IngestionWarning] = Field(default_factory=list)
     chunk_count: int = 0
     indexed: bool = False
+
+
+class RetrievalResult(BaseModel):
+    """Result of retrieving a single chunk from the vector store."""
+
+    chunk_id: str = Field(description="Unique chunk identifier")
+    document_id: str = Field(description="Document ID")
+    source_filename: str = Field(description="Original filename")
+    page_number: int = Field(ge=1, description="1-based page number")
+    text: str = Field(description="Text content of the retrieved chunk")
+    distance: float = Field(description="Cosine distance from query vector (0.0 = identical)")
+    similarity: float = Field(description="Cosine similarity metric (1.0 = identical)")
+    chunk_index: int = Field(ge=0, description="Index of chunk in document")
+    metadata: dict = Field(default_factory=dict, description="Underlying metadata dictionary")
+
+
+class IndexingResult(BaseModel):
+    """Summary of the vector indexing process for an ingested report."""
+
+    document_id: str = Field(description="Document ID")
+    total_pages: int = Field(ge=0, description="Total pages processed")
+    total_chunks: int = Field(ge=0, description="Total chunks produced")
+    total_embeddings: int = Field(ge=0, description="Total embeddings generated")
+    embedding_model: str = Field(description="Name of the embedding model used")
+    embedding_dimension: int = Field(ge=1, description="Dimensionality of vectors")
+    collection_name: str = Field(description="Name of the isolated Chroma collection")
