@@ -91,6 +91,16 @@ class FinancialMetric(BaseModel):
         default="found",
         description="Extraction status indicating whether metric was verified",
     )
+    normalized_name: Optional[str] = Field(default=None, description="Standardized metric key, e.g. revenue, net_income")
+    numeric_value: Optional[float] = Field(default=None, description="Clean numeric float for calculation")
+    prior_period_value: Optional[float | str] = Field(default=None, description="Prior year value reported in filing")
+    prior_period_label: Optional[str] = Field(default=None, description="Prior fiscal period label")
+    yoy_absolute_change: Optional[float] = Field(default=None, description="Python-calculated absolute YoY change")
+    yoy_percentage_change: Optional[float] = Field(default=None, description="Python-calculated percentage YoY change")
+    yoy_calculation_note: Optional[str] = Field(default=None, description="Details or constraints of YoY calculation")
+    is_verified: bool = Field(default=True, description="Whether citation was verified against source text")
+    has_conflict: bool = Field(default=False, description="Whether conflicting values were reported in filing")
+    conflicting_values: List[str] = Field(default_factory=list, description="List of conflicting reported values")
 
 
 class RiskItem(BaseModel):
@@ -112,6 +122,9 @@ class RiskItem(BaseModel):
     )
     source_pages: List[int] = Field(default_factory=list, description="Source page numbers")
     source_quotes: List[str] = Field(default_factory=list, description="Exact supporting quotes")
+    impact_type: Optional[str] = Field(default=None, description="Quantified, qualitative, or unspecified")
+    is_verified: bool = Field(default=True, description="Whether source citation was verified against page text")
+    source_heading: Optional[str] = Field(default=None, description="Section heading in filing")
 
 
 class OutlookItem(BaseModel):
@@ -125,6 +138,11 @@ class OutlookItem(BaseModel):
     )
     source_pages: List[int] = Field(default_factory=list, description="Source page numbers")
     source_quotes: List[str] = Field(default_factory=list, description="Supporting excerpts")
+    time_horizon: Optional[str] = Field(default=None, description="Time horizon or target timeframe")
+    direction: Optional[str] = Field(default=None, description="positive, negative, mixed, or undetermined")
+    target_metric: Optional[str] = Field(default=None, description="Targeted financial metric if stated")
+    target_value: Optional[str] = Field(default=None, description="Target numerical amount or range if stated")
+    is_verified: bool = Field(default=True, description="Whether citation was verified against source page text")
 
 
 class ReportAnalysis(BaseModel):
@@ -141,6 +159,28 @@ class ReportAnalysis(BaseModel):
     outlook: List[OutlookItem] = Field(default_factory=list, description="Forward-looking statements")
     limitations: List[str] = Field(default_factory=list, description="Document processing or scope limitations")
     generated_at: str = Field(description="ISO timestamp of analysis generation")
+    analysis_status: Literal["complete", "partial", "failed"] = Field(
+        default="complete",
+        description="Coverage status of full report analysis",
+    )
+    pages_analyzed: int = Field(default=0, ge=0, description="Total readable pages processed")
+    total_pages: int = Field(default=0, ge=0, description="Total pages in filing")
+    batches_succeeded: int = Field(default=0, ge=0, description="Number of analysis batches completed")
+    batches_failed: int = Field(default=0, ge=0, description="Number of analysis batches that failed")
+    data_conflicts: List[str] = Field(default_factory=list, description="Unresolved reporting discrepancies")
+    verification_rate: float = Field(default=1.0, ge=0.0, le=1.0, description="Ratio of verified citations")
+
+
+class BatchExtractionResult(BaseModel):
+    """Structured extraction result returned by Gemini for a single bounded batch of pages."""
+
+    report_title: Optional[str] = Field(default=None, description="Filing or company title if identified in batch")
+    company_name: Optional[str] = Field(default=None, description="Company name if identified in batch")
+    fiscal_period: Optional[str] = Field(default=None, description="Fiscal period covered if identified")
+    metrics: List[FinancialMetric] = Field(default_factory=list, description="Extracted metrics with page references")
+    risks: List[RiskItem] = Field(default_factory=list, description="Extracted risk disclosures")
+    outlook: List[OutlookItem] = Field(default_factory=list, description="Extracted forward-looking guidance")
+    executive_summary_excerpts: List[str] = Field(default_factory=list, description="Key strategic summary points")
 
 
 class IngestionWarning(BaseModel):

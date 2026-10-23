@@ -1,7 +1,7 @@
 # Build Progress — Financial Report Analyzer (FinSight)
 
 Last Updated: 2026-10-23
-Current Status: **Phase 0, Phase 1, Phase 2, Phase 3 & Phase 4 Complete**
+Current Status: **Phase 0, Phase 1, Phase 2, Phase 3, Phase 4 & Phase 5 Complete**
 
 ---
 
@@ -109,12 +109,47 @@ Current Status: **Phase 0, Phase 1, Phase 2, Phase 3 & Phase 4 Complete**
   - Standalone Phase 3 vector search diagnostic tool retained in expander.
 - [x] Write comprehensive unit tests in `tests/test_citation_validator.py` and `tests/test_rag.py` (78 passing tests total).
 
-### Phase 5: Financial Metrics, Risks & Outlook Extraction *(Next Phase)*
-- [ ] Structured KPI extraction (Revenue, Net Income, Capex, EPS, etc.).
-- [ ] Deterministic Python YoY change calculations (avoiding LLM math).
-- [ ] Risk factor and management guidance itemization.
+### Phase 5: Financial Metrics, Risks & Outlook Extraction
+- [x] Implement deterministic financial arithmetic service (`financial_calculations.py`) using pure Python Decimal math:
+  - Absolute change = current - prior, Percentage change = ((current - prior) / prior) * 100.
+  - Strict safeguards: rejects mismatched currencies and unknown unit scale conversions.
+  - Financial edge cases: zero prior value (withholds percentage, reports absolute), loss-to-profit transitions (withholds deceptive percentage), negative prior values.
+  - Scale multiplier conversions (thousands, millions, billions).
+  - Derived Free Cash Flow (FCF = Operating Cash Flow - Capital Expenditures) with calculation provenance.
+  - Metric deduplication and conflict detection (`deduplicate_and_resolve_metrics`).
+- [x] Extend data contracts in `schemas.py`:
+  - `FinancialMetric`: normalized_name, numeric_value, prior_period_value, yoy_absolute_change, yoy_percentage_change, yoy_calculation_note, is_verified, has_conflict, conflicting_values.
+  - `RiskItem`: impact_type, is_verified, source_heading.
+  - `OutlookItem`: time_horizon, direction, target_metric, target_value, is_verified.
+  - `ReportAnalysis`: analysis_status, pages_analyzed, total_pages, batches_succeeded, batches_failed, data_conflicts, verification_rate.
+  - `BatchExtractionResult`: intermediate Pydantic structured output contract.
+- [x] Implement structured batch extractor (`financial_extractor.py`):
+  - Google GenAI SDK structured schema extraction using configured `gemini-3.8-flash`.
+  - Boundary tags (`<page number="...">...</page>`) defending against prompt injection.
+  - Citation verification checking page number, verbatim quote, and numeric presence.
+  - Bounded exponential backoff on transient errors (HTTP 429, 503).
+  - JSON parser with markdown code-fence repair.
+- [x] Implement full-report orchestration pipeline (`financial_analysis_pipeline.py`):
+  - Bounded page partitioning (`partition_pages_into_batches` by page cap and character budget).
+  - Aggregation across all readable pages.
+  - Metric deduplication and conflict detection.
+  - Deterministic Python calculations for all comparable metrics.
+  - Synthesis of executive overview and key strategic takeaways.
+  - Partial analysis support: preserves successful batches when an individual batch fails.
+- [x] Streamlit dashboard integration (`app.py`):
+  - Explicit sidebar **Extract Financials** action with real-time progress feedback.
+  - Overview tab: Executive summary, key strategic takeaways, and 4 top KPI highlight cards (Revenue, Net Income, OCF, FCF) with YoY growth badges.
+  - Financial Metrics tab: Complete structured table with reported vs. prior values, Python YoY changes, page badges, verification badges, and verbatim quote expanders.
+  - Risks & Outlook tab: Two-column layout separating Disclosed Risk Factors (with categories and mitigations) and Management Outlook (with target periods and horizon).
+  - Sources & Processing tab: Financial extraction audit statistics, batch counts, verification rates, and conflict notices.
+  - Session reset: Invalidate previous financial analysis on new upload and clear on reset.
+- [x] Comprehensive test coverage:
+  - `tests/test_financial_calculations.py`: 14 tests.
+  - `tests/test_financial_extractor.py`: 5 tests.
+  - `tests/test_financial_analysis_pipeline.py`: 4 tests.
+  - Full suite: 101 passed, 1 skipped in 8.31s.
 
-### Phase 6: Exports & Usability Polish *(Upcoming)*
+### Phase 6: Exports & Usability Polish *(Next Phase)*
 - [ ] JSON, CSV, and Markdown export generators.
 - [ ] Reset validation ensuring no stale data remains across reports.
 

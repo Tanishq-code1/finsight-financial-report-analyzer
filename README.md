@@ -92,7 +92,7 @@ Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
    Edit `.env` to supply your `GEMINI_API_KEY`:
    ```dotenv
    GEMINI_API_KEY=your_actual_gemini_api_key
-   GEMINI_GENERATION_MODEL=gemini-2.5-flash
+   GEMINI_GENERATION_MODEL=gemini-3.8-flash
    GEMINI_EMBEDDING_MODEL=gemini-embedding-2
    GEMINI_EMBEDDING_DIMENSION=768
    ```
@@ -111,7 +111,7 @@ All settings can be configured via environment variables or `.streamlit/secrets.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | *None* | Required for AI operations (Embeddings, RAG, Extraction). |
-| `GEMINI_GENERATION_MODEL` | `gemini-2.5-flash` | Gemini model used for synthesis, Q&A, and extraction. |
+| `GEMINI_GENERATION_MODEL` | `gemini-3.8-flash` | Gemini model used for synthesis, Q&A, and extraction. |
 | `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-2` | Google embedding model used for vector representations. |
 | `GEMINI_EMBEDDING_DIMENSION` | `768` | Vector dimensionality (768D). |
 | `MAX_UPLOAD_MB` | `25` | Maximum PDF file upload size limit in megabytes. |

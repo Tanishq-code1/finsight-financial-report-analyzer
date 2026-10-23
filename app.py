@@ -22,6 +22,13 @@ from financial_report_analyzer.embedding_service import EmbeddingService
 from financial_report_analyzer.indexing_pipeline import run_indexing_pipeline
 from financial_report_analyzer.rag import RAGService
 from financial_report_analyzer.citation_validator import CitationValidator
+from financial_report_analyzer.financial_analysis_pipeline import run_financial_analysis_pipeline
+from financial_report_analyzer.financial_extractor import FinancialExtractor
+from financial_report_analyzer.financial_calculations import (
+    calculate_yoy_comparison,
+    calculate_free_cash_flow,
+    parse_financial_number,
+)
 
 # Initialize logging
 setup_logging()
@@ -121,6 +128,70 @@ st.markdown(
         border-radius: 6px;
         padding: 1rem 1.25rem;
         margin-bottom: 1rem;
+    }
+    .kpi-metric-box {
+        background-color: #1E293B;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 0.75rem;
+        height: 100%;
+    }
+    .kpi-title {
+        font-size: 0.8rem;
+        color: #94A3B8;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.25rem;
+    }
+    .kpi-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        margin-bottom: 0.25rem;
+    }
+    .kpi-badge-pos {
+        background-color: rgba(16, 185, 129, 0.15);
+        color: #34D399;
+        font-size: 0.8rem;
+        padding: 0.15rem 0.45rem;
+        border-radius: 4px;
+        font-weight: 600;
+    }
+    .kpi-badge-neg {
+        background-color: rgba(239, 68, 68, 0.15);
+        color: #F87171;
+        font-size: 0.8rem;
+        padding: 0.15rem 0.45rem;
+        border-radius: 4px;
+        font-weight: 600;
+    }
+    .kpi-badge-neu {
+        background-color: rgba(148, 163, 184, 0.15);
+        color: #94A3B8;
+        font-size: 0.8rem;
+        padding: 0.15rem 0.45rem;
+        border-radius: 4px;
+        font-weight: 600;
+    }
+    .conflict-banner {
+        background-color: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        border-radius: 6px;
+        padding: 0.8rem 1rem;
+        margin-bottom: 1rem;
+        color: #FCA5A5;
+        font-size: 0.9rem;
+    }
+    .tag-pill {
+        background-color: #0F172A;
+        border: 1px solid #475569;
+        border-radius: 4px;
+        padding: 0.15rem 0.4rem;
+        font-size: 0.75rem;
+        color: #CBD5E1;
+        font-weight: 500;
     }
     </style>
     """,
@@ -232,12 +303,56 @@ def main() -> None:
                 type="primary",
                 use_container_width=True,
                 disabled=not has_valid_upload,
+                help="Extract text, generate chunks, and build ephemeral vector index.",
             )
         with col_clear:
             clear_clicked = st.button("Clear Report", on_click=clear_report_session, use_container_width=True)
 
+        # Explicit Financial Disclosures Analysis action button
+        has_extracted_doc = bool(st.session_state.page_records)
+        fin_btn_clicked = st.button(
+            "📊 Extract Financials (KPIs & Risks)",
+            type="secondary",
+            use_container_width=True,
+            disabled=not has_extracted_doc or st.session_state.is_processing,
+            help="Extract structured KPIs, balance sheet items, disclosed risks, management outlook, and calculate YoY changes.",
+        )
+
+        if fin_btn_clicked and has_extracted_doc:
+            if not config.has_api_key:
+                st.error("Gemini API key is required to analyze financials. Please set GEMINI_API_KEY in .env or settings.")
+            else:
+                st.session_state.is_processing = True
+                p_bar = st.progress(0.0)
+                s_text = st.empty()
+
+                def update_fin_p(frac: float, msg: str) -> None:
+                    p_bar.progress(frac)
+                    s_text.text(msg)
+
+                try:
+                    analysis = run_financial_analysis_pipeline(
+                        pages=st.session_state.page_records,
+                        metadata=st.session_state.report_metadata,
+                        config=config,
+                        progress_callback=update_fin_p,
+                    )
+                    st.session_state.report_analysis = analysis
+                    s_text.text("Financial extraction complete!")
+                    st.success(
+                        f"Financial Analysis Ready: Extracted {len(analysis.metrics)} metrics, "
+                        f"{len(analysis.risks)} risks, and {len(analysis.outlook)} forward outlook items."
+                    )
+                except Exception as fin_err:
+                    logger.error("Financial analysis pipeline error: %s", str(fin_err), exc_info=True)
+                    st.error(f"Financial Analysis Error: {str(fin_err)}")
+                finally:
+                    st.session_state.is_processing = False
+
         if uploaded_file and analyze_clicked and has_valid_upload:
             st.session_state.is_processing = True
+            # Invalidate any prior financial analysis from previous document
+            st.session_state.report_analysis = None
 
             # Safely delete any previous session vector collection
             if st.session_state.vector_store is not None:
@@ -378,20 +493,149 @@ def main() -> None:
             meta = st.session_state.report_metadata
             chunks_count = len(st.session_state.chunk_records) if st.session_state.chunk_records else 0
             index_badge = "✅ Vector Index Ready" if st.session_state.is_indexed else "⚠️ Text Extracted (Index Paused)"
+            analysis = st.session_state.report_analysis
+
+            status_badge = "⏳ Awaiting Extraction"
+            if analysis:
+                if analysis.analysis_status == "complete":
+                    status_badge = f"✅ Complete Analysis ({analysis.pages_analyzed}/{analysis.total_pages} pages)"
+                elif analysis.analysis_status == "partial":
+                    status_badge = f"⚠️ Partial Analysis ({analysis.batches_succeeded} ok, {analysis.batches_failed} failed)"
+                else:
+                    status_badge = "❌ Extraction Failed"
 
             st.markdown(
                 f"""
                 <div class="metric-card">
-                    <h4>Document: {meta.filename}</h4>
-                    <p>Total Pages: <strong>{meta.total_pages}</strong> | Chunks Generated: <strong>{chunks_count}</strong></p>
-                    <p>Document Digest ID: <code>{meta.document_id}</code></p>
-                    <p>Status: <strong>{index_badge}</strong></p>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h4 style="margin: 0;">{analysis.company_name or 'Document'}: {meta.filename}</h4>
+                        <span class="tag-pill" style="font-weight: 600;">{status_badge}</span>
+                    </div>
+                    <p style="margin-top: 0.5rem; color: #94A3B8; font-size: 0.9rem;">
+                        Period: <strong>{analysis.fiscal_period if analysis and analysis.fiscal_period else 'Report Period'}</strong> | 
+                        Pages: <strong>{meta.total_pages}</strong> | 
+                        Chunks: <strong>{chunks_count}</strong> | 
+                        Vector Store: <strong>{index_badge}</strong>
+                    </p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            if not st.session_state.report_analysis:
-                st.info("Executive summary generation will be connected in Phase 4 & 5.")
+
+            if analysis:
+                # Display reporting discrepancies if any
+                if analysis.data_conflicts:
+                    st.markdown(
+                        f"""
+                        <div class="conflict-banner">
+                            <strong>⚠️ Reporting Conflicts Detected ({len(analysis.data_conflicts)}):</strong>
+                            <ul style="margin: 0.5rem 0 0 1rem; padding: 0;">
+                                {''.join(f'<li>{c}</li>' for c in analysis.data_conflicts)}
+                            </ul>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                # Key KPI Highlight Cards (4 Columns)
+                rev = next((m for m in analysis.metrics if m.normalized_name == "revenue" or "revenue" in m.name.lower()), None)
+                ni = next((m for m in analysis.metrics if m.normalized_name == "net_income" or "net income" in m.name.lower()), None)
+                ocf = next((m for m in analysis.metrics if m.normalized_name == "operating_cash_flow" or "operating cash" in m.name.lower()), None)
+                fcf = next((m for m in analysis.metrics if m.name == "Free Cash Flow"), None)
+
+                kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+
+                def render_kpi_card(title: str, m: Optional[FinancialMetric]) -> str:
+                    if not m or m.value is None:
+                        return f"""
+                        <div class="kpi-metric-box">
+                            <div class="kpi-title">{title}</div>
+                            <div class="kpi-value" style="color: #64748B;">N/A</div>
+                            <small style="color: #94A3B8;">Not reported in filing</small>
+                        </div>
+                        """
+                    curr_str = f"{m.currency} " if m.currency else "$"
+                    unit_str = f" {m.unit_scale}" if m.unit_scale else ""
+                    val_str = f"{curr_str}{m.value:,}{unit_str}" if isinstance(m.value, (int, float)) else f"{curr_str}{m.value}{unit_str}"
+
+                    # YoY Badge
+                    badge_html = ""
+                    if m.yoy_percentage_change is not None:
+                        if m.yoy_percentage_change > 0:
+                            badge_html = f'<span class="kpi-badge-pos">+{m.yoy_percentage_change:.2f}% YoY</span>'
+                        elif m.yoy_percentage_change < 0:
+                            badge_html = f'<span class="kpi-badge-neg">{m.yoy_percentage_change:.2f}% YoY</span>'
+                        else:
+                            badge_html = f'<span class="kpi-badge-neu">0.00% YoY</span>'
+                    elif m.yoy_calculation_note and "YoY" in m.yoy_calculation_note:
+                        badge_html = f'<span class="kpi-badge-neu">{m.yoy_calculation_note}</span>'
+
+                    page_str = f'<span class="citation-tag" style="float: right;">p. {m.source_page}</span>' if m.source_page else ""
+
+                    return f"""
+                    <div class="kpi-metric-box">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                            <span class="kpi-title">{title}</span>
+                            {page_str}
+                        </div>
+                        <div class="kpi-value">{val_str}</div>
+                        <div style="margin-top: 0.4rem;">{badge_html}</div>
+                    </div>
+                    """
+
+                with kpi_col1:
+                    st.markdown(render_kpi_card("Total Revenue", rev), unsafe_allow_html=True)
+                with kpi_col2:
+                    st.markdown(render_kpi_card("Net Income", ni), unsafe_allow_html=True)
+                with kpi_col3:
+                    st.markdown(render_kpi_card("Operating Cash Flow", ocf), unsafe_allow_html=True)
+                with kpi_col4:
+                    st.markdown(render_kpi_card("Free Cash Flow (Python)", fcf), unsafe_allow_html=True)
+
+                st.markdown("### 📝 Executive Overview")
+                st.markdown(
+                    f"""
+                    <div class="answer-card">
+                        <p style="font-size: 1.05rem; line-height: 1.6; margin-bottom: 0;">{analysis.executive_summary}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if analysis.key_takeaways:
+                    st.markdown("**Key Strategic Takeaways:**")
+                    for t in analysis.key_takeaways:
+                        st.markdown(f"- {t}")
+
+                if analysis.limitations:
+                    with st.expander(f"ℹ️ Scope & Extraction Limitations ({len(analysis.limitations)})", expanded=False):
+                        for lim in analysis.limitations:
+                            st.caption(f"• {lim}")
+            else:
+                st.markdown(
+                    """
+                    <div class="empty-card">
+                        <h4>Financial Disclosures Not Yet Extracted</h4>
+                        <p>Document text is ready. Click <strong>Extract Financial Disclosures</strong> to extract key KPIs, itemize risk factors, and compute deterministic YoY growth.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if st.button("📊 Extract Financial Disclosures Now", type="primary", key="btn_run_fin_tab1"):
+                    if not config.has_api_key:
+                        st.error("Gemini API key is required to analyze financials. Please set GEMINI_API_KEY in .env or settings.")
+                    else:
+                        with st.spinner("Analyzing document batches and calculating YoY metrics in Python..."):
+                            try:
+                                analysis_res = run_financial_analysis_pipeline(
+                                    pages=st.session_state.page_records,
+                                    metadata=st.session_state.report_metadata,
+                                    config=config,
+                                )
+                                st.session_state.report_analysis = analysis_res
+                                st.rerun()
+                            except Exception as run_err:
+                                st.error(f"Extraction failed: {str(run_err)}")
 
     # Tab 2: Ask the Report (Source-Grounded RAG Q&A & Diagnostic Vector Search)
     with tab_qa:
@@ -609,53 +853,199 @@ def main() -> None:
 
     # Tab 3: Financial Metrics
     with tab_metrics:
-        st.subheader("Key Performance Indicators (KPIs)")
-        st.caption("Structured extraction of revenue, operating income, net income, cash flow, capex, cash, debt, and EPS.")
+        st.subheader("Key Financial Performance Indicators (KPIs)")
+        st.caption(
+            "Structured extraction of revenue, profitability, cash flow, debt, and balance-sheet metrics with Python-computed YoY comparisons."
+        )
 
-        if not st.session_state.report_analysis:
+        analysis = st.session_state.report_analysis
+        if not analysis:
             st.markdown(
                 """
                 <div class="empty-card">
-                    <h4>Financial Metrics Table</h4>
-                    <p>Extracted metrics will be presented with period labels, currency, reported vs. calculated classification, and source page citations.</p>
+                    <h4>No Extracted Financial Metrics</h4>
+                    <p>Click <strong>Extract Financials</strong> in the sidebar or Overview tab to extract verified metrics and compute YoY growth.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
         else:
-            st.info("Metrics table will be rendered here.")
+            if not analysis.metrics:
+                st.info("No structured financial metrics were detected in the analyzed pages.")
+            else:
+                # Tabular summary dataframe
+                df_rows = []
+                for m in analysis.metrics:
+                    curr_str = f"{m.currency} " if m.currency else ""
+                    val_str = f"{curr_str}{m.value:,}" if isinstance(m.value, (int, float)) else (f"{curr_str}{m.value}" if m.value else "N/A")
+                    prior_str = f"{curr_str}{m.prior_period_value:,}" if isinstance(m.prior_period_value, (int, float)) else (f"{curr_str}{m.prior_period_value}" if m.prior_period_value else "—")
+                    yoy_pct = f"{'+' if m.yoy_percentage_change and m.yoy_percentage_change > 0 else ''}{m.yoy_percentage_change:.2f}%" if m.yoy_percentage_change is not None else (m.yoy_calculation_note or "—")
+                    yoy_abs = f"{'+' if m.yoy_absolute_change and m.yoy_absolute_change > 0 else ''}{m.yoy_absolute_change:,.2f}" if m.yoy_absolute_change is not None else "—"
+
+                    df_rows.append(
+                        {
+                            "Metric": m.name,
+                            "Reported Value": val_str,
+                            "Scale": m.unit_scale or "units",
+                            "Period": m.period_label or "Current",
+                            "Prior Value": prior_str,
+                            "YoY Change (%)": yoy_pct,
+                            "YoY Change (Abs)": yoy_abs,
+                            "Source Page": f"Page {m.source_page}" if m.source_page else "—",
+                            "Status": "✅ Verified" if m.is_verified else "⚠️ Needs Review",
+                            "Classification": "Calculated (Python)" if m.metric_type == "calculated" else "Reported",
+                        }
+                    )
+
+                st.dataframe(pd.DataFrame(df_rows), use_container_width=True, hide_index=True)
+
+                st.markdown("#### Itemized Metric Provenance & Quotations")
+                for m in analysis.metrics:
+                    v_badge = (
+                        '<span class="verified-badge">✓ Verified in Source</span>'
+                        if m.is_verified
+                        else '<span style="color: #F87171; font-size: 0.75rem;">⚠️ Citation Unverified</span>'
+                    )
+                    type_badge = f'<span class="tag-pill">{m.metric_type.title()}</span>'
+                    conflict_badge = (
+                        '<span style="color: #F87171; font-weight: 600; margin-left: 0.5rem;">[CONFLICT DETECTED]</span>'
+                        if m.has_conflict
+                        else ""
+                    )
+
+                    st.markdown(
+                        f"""
+                        <div class="metric-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <strong>{m.name}</strong> {conflict_badge}
+                                <div>
+                                    {type_badge}
+                                    <span class="citation-tag" style="margin-left: 0.4rem;">Page {m.source_page or 'N/A'}</span>
+                                    {v_badge}
+                                </div>
+                            </div>
+                            <p style="margin: 0.4rem 0 0.2rem 0; font-size: 0.95rem; color: #E2E8F0;">
+                                Reported: <strong>{m.currency or ''} {m.value} {m.unit_scale or ''}</strong> ({m.period_label or 'Current'})
+                                {f" | Prior: <strong>{m.prior_period_value}</strong> ({m.prior_period_label})" if m.prior_period_value else ""}
+                                {f" | YoY: <strong>{m.yoy_calculation_note}</strong>" if m.yoy_calculation_note else ""}
+                            </p>
+                            {f'<p style="color: #FCA5A5; font-size: 0.85rem; margin-top: 0.25rem;"><strong>Conflict Note:</strong> {m.confidence_note}</p>' if m.has_conflict else ''}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if m.source_quote:
+                        with st.expander(f"Verbatim Source Excerpt for {m.name}", expanded=False):
+                            st.caption(f'"{m.source_quote}"')
 
     # Tab 4: Risks & Outlook
     with tab_risks:
-        st.subheader("Disclosed Risks & Management Outlook")
-        st.caption("Separate company-stated disclosures from forward-looking commentary.")
+        st.subheader("Disclosed Risk Factors & Management Outlook")
+        st.caption(
+            "Itemized disclosure of operational, regulatory, and financial risks alongside forward-looking guidance and management expectations."
+        )
 
-        col_risk, col_outlook = st.columns(2)
-        with col_risk:
-            st.markdown("#### Disclosed Risk Factors")
+        analysis = st.session_state.report_analysis
+        if not analysis:
             st.markdown(
                 """
                 <div class="empty-card">
-                    <p>Itemized risk disclosures with cited excerpts and stated mitigations.</p>
+                    <h4>No Disclosed Risks or Outlook Extracted</h4>
+                    <p>Click <strong>Extract Financials</strong> in the sidebar or Overview tab to extract risk disclosures and management forward guidance.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-        with col_outlook:
-            st.markdown("#### Management Outlook & Guidance")
-            st.markdown(
-                """
-                <div class="empty-card">
-                    <p>Forward-looking statements, target periods, and qualitative commentary.</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+        else:
+            col_risk, col_outlook = st.columns(2)
+
+            with col_risk:
+                st.markdown(f"#### ⚠️ Disclosed Risk Factors ({len(analysis.risks)})")
+                if not analysis.risks:
+                    st.info("No material risk factors identified in analyzed pages.")
+                for r in analysis.risks:
+                    cat_pill = f'<span class="tag-pill">{r.risk_category}</span>' if r.risk_category else ""
+                    pages_label = f"Page {', '.join(str(p) for p in r.source_pages)}" if r.source_pages else "N/A"
+                    v_badge = '<span class="verified-badge">✓ Verified</span>' if r.is_verified else '<span style="color: #F87171;">⚠️ Unverified</span>'
+
+                    st.markdown(
+                        f"""
+                        <div class="metric-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                                <strong>{r.risk_title}</strong>
+                                <div>
+                                    {cat_pill}
+                                    <span class="citation-tag">{pages_label}</span>
+                                    {v_badge}
+                                </div>
+                            </div>
+                            <p style="font-size: 0.92rem; color: #CBD5E1; margin-bottom: 0.4rem;">{r.description}</p>
+                            {f'<p style="font-size: 0.85rem; color: #6EE7B7; margin-bottom: 0;"><strong>Company-Stated Mitigation:</strong> {r.company_stated_mitigation}</p>' if r.company_stated_mitigation else ''}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if r.source_quotes:
+                        with st.expander(f"Supporting Quotations ({len(r.source_quotes)})", expanded=False):
+                            for q in r.source_quotes:
+                                st.caption(f'"{q}"')
+
+            with col_outlook:
+                st.markdown(f"#### 🔮 Management Outlook & Guidance ({len(analysis.outlook)})")
+                if not analysis.outlook:
+                    st.info("No forward-looking guidance or outlook items identified.")
+                for o in analysis.outlook:
+                    type_pill = f'<span class="tag-pill">{o.statement_type.replace("_", " ").title()}</span>'
+                    pages_label = f"Page {', '.join(str(p) for p in o.source_pages)}" if o.source_pages else "N/A"
+                    v_badge = '<span class="verified-badge">✓ Verified</span>' if o.is_verified else '<span style="color: #F87171;">⚠️ Unverified</span>'
+
+                    st.markdown(
+                        f"""
+                        <div class="metric-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                                <span style="font-weight: 600; color: #93C5FD;">Period: {o.period or 'Upcoming Period'}</span>
+                                <div>
+                                    {type_pill}
+                                    <span class="citation-tag">{pages_label}</span>
+                                    {v_badge}
+                                </div>
+                            </div>
+                            <p style="font-size: 0.92rem; color: #CBD5E1; margin-bottom: 0.4rem;">{o.statement}</p>
+                            {f'<p style="font-size: 0.85rem; color: #94A3B8; margin-bottom: 0;"><strong>Target / Timeframe:</strong> {o.time_horizon or o.target_value}</p>' if (o.time_horizon or o.target_value) else ''}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if o.source_quotes:
+                        with st.expander(f"Supporting Excerpts ({len(o.source_quotes)})", expanded=False):
+                            for q in o.source_quotes:
+                                st.caption(f'"{q}"')
 
     # Tab 5: Sources & Processing Diagnostics
     with tab_sources:
         st.subheader("Processing Diagnostics & Retrieval Provenance")
         st.caption("Inspect parsing metrics, warnings, chunk counts, and retrieval context.")
+
+        if st.session_state.report_analysis:
+            analysis = st.session_state.report_analysis
+            st.subheader("Financial Analysis Execution & Provenance Audit")
+            v_rate_pct = analysis.verification_rate * 100
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                    <h5>Analysis Pipeline Status: <strong>{analysis.analysis_status.upper()}</strong></h5>
+                    <p>Pages Analyzed: <strong>{analysis.pages_analyzed}</strong> of <strong>{analysis.total_pages}</strong> ({analysis.batches_succeeded} batches succeeded, {analysis.batches_failed} failed)</p>
+                    <p>KPI Metrics Extracted: <strong>{len(analysis.metrics)}</strong> | Disclosed Risks: <strong>{len(analysis.risks)}</strong> | Outlook Items: <strong>{len(analysis.outlook)}</strong></p>
+                    <p>Citation Verification Rate: <strong>{v_rate_pct:.1f}%</strong> of claims confirmed against source page text</p>
+                    <p>Generated At: <code>{analysis.generated_at}</code> | Model: <code>{config.gemini_generation_model}</code></p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if analysis.data_conflicts:
+                st.warning(f"**Discrepancy Audit ({len(analysis.data_conflicts)} conflicts detected):**")
+                for c in analysis.data_conflicts:
+                    st.markdown(f"- {c}")
 
         if not st.session_state.report_metadata:
             st.markdown(
