@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from financial_report_analyzer.config import AppConfig
-from financial_report_analyzer.errors import ConfigurationError
+from financial_report_analyzer.errors import ConfigurationError, RAGGenerationError
 from financial_report_analyzer.schemas import (
     PageRecord,
     FinancialMetric,
@@ -231,3 +231,27 @@ def test_markdown_code_fence_handling(mock_config, sample_pages):
     ext = FinancialExtractor(config=mock_config, client=mock_client)
     res = ext.extract_batch(sample_pages, document_id="doc_test_10k")
     assert res.company_name == "Acme"
+
+
+def test_extractor_handles_timeout_gracefully(mock_config, sample_pages):
+    """Verify that timeout exceptions from client generate friendly RAGGenerationError."""
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = TimeoutError("The read operation timed out")
+
+    ext = FinancialExtractor(config=mock_config, client=mock_client, timeout_sec=10.0)
+    with pytest.raises(RAGGenerationError) as exc_info:
+        ext.extract_batch(sample_pages, document_id="doc_test_10k")
+
+    assert "timed out" in str(exc_info.value).lower()
+    assert hasattr(exc_info.value, "user_friendly_message")
+    assert "timed out" in exc_info.value.user_friendly_message.lower()
+
+
+def test_extractor_respects_custom_timeout(mock_config):
+    """Verify custom timeout setting is retained on FinancialExtractor."""
+    custom_cfg = AppConfig(
+        gemini_api_key="mock-key",
+        generation_timeout_sec=45.0,
+    )
+    ext = FinancialExtractor(config=custom_cfg)
+    assert ext.timeout_sec == 45.0

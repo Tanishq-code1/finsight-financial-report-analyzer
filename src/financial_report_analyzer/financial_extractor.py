@@ -71,12 +71,14 @@ class FinancialExtractor:
         system_prompt: Optional[str] = None,
         max_retries: int = 3,
         initial_backoff: float = 1.0,
+        timeout_sec: Optional[float] = None,
     ) -> None:
         self.config = config or load_config()
         self.generation_model = self.config.gemini_generation_model or "gemini-3.8-flash"
         self.system_prompt = system_prompt or load_extraction_prompt()
         self.max_retries = max_retries
         self.initial_backoff = initial_backoff
+        self.timeout_sec = timeout_sec or getattr(self.config, "generation_timeout_sec", 120.0)
 
         if client is not None:
             self._client = client
@@ -85,7 +87,14 @@ class FinancialExtractor:
                 logger.warning("Initializing FinancialExtractor without GEMINI_API_KEY")
                 self._client = None
             else:
-                self._client = genai.Client(api_key=self.config.gemini_api_key)
+                try:
+                    import httpx
+                    http_opts = genai_types.HttpOptions(
+                        client_args={"timeout": httpx.Timeout(self.timeout_sec, connect=15.0, read=self.timeout_sec)}
+                    )
+                    self._client = genai.Client(api_key=self.config.gemini_api_key, http_options=http_opts)
+                except Exception:
+                    self._client = genai.Client(api_key=self.config.gemini_api_key)
 
     @property
     def is_configured(self) -> bool:
@@ -115,14 +124,26 @@ class FinancialExtractor:
 
         while True:
             try:
-                logger.debug("Dispatching extraction batch to model '%s' (attempt %d)", self.generation_model, attempt + 1)
+                t_model_start = time.monotonic()
+                logger.info(
+                    "Dispatching extraction batch to model '%s' (attempt %d, timeout %.1fs)",
+                    self.generation_model,
+                    attempt + 1,
+                    self.timeout_sec,
+                )
                 response = client.models.generate_content(
                     model=self.generation_model,
                     contents=user_content,
                     config=config,
                 )
+                call_elapsed = time.monotonic() - t_model_start
                 if not response or not response.text:
                     raise RAGGenerationError("Received empty response from extraction model.")
+                logger.info(
+                    "Gemini extraction response received in %.2fs (length: %d chars)",
+                    call_elapsed,
+                    len(response.text),
+                )
                 return response.text
 
             except genai_errors.APIError as exc:
@@ -150,6 +171,13 @@ class FinancialExtractor:
             except Exception as exc:
                 if isinstance(exc, RAGGenerationError):
                     raise
+                err_str = str(exc).lower()
+                if "timeout" in err_str or "timed out" in err_str:
+                    logger.error("Financial extraction timed out after %.1fs: %s", self.timeout_sec, exc)
+                    raise RAGGenerationError(
+                        f"Model request timed out after {self.timeout_sec:.0f}s: {str(exc)}",
+                        user_friendly_message="Financial extraction timed out waiting for the AI model. Report text is preserved; please retry the extraction.",
+                    ) from exc
                 logger.error("Unexpected error during extraction: %s", str(exc), exc_info=True)
                 raise RAGGenerationError(f"Extraction failed: {str(exc)}") from exc
 
@@ -273,9 +301,11 @@ class FinancialExtractor:
         if not pages:
             return BatchExtractionResult()
 
+        t_batch_start = time.monotonic()
         page_bounds = f"pages {pages[0].page_number} to {pages[-1].page_number}"
         logger.info("Extracting financial data from %s (%d pages)", page_bounds, len(pages))
 
+        # 1. Format pages
         formatted_pages = format_batch_pages(pages)
         user_prompt = f"""DOCUMENT ID: {document_id}
 REPORT PAGES TO ANALYZE ({page_bounds}):
@@ -284,7 +314,27 @@ REPORT PAGES TO ANALYZE ({page_bounds}):
 TASK:
 Extract all available financial performance indicators (revenue, operating income, net income, EPS, cash flow, debt, assets), comparative prior period figures, disclosed risk factors, and forward-looking management guidance strictly from the pages above."""
 
+        t_call_start = time.monotonic()
         raw_output = self._call_gemini_with_retry(user_prompt)
+        t_call_elapsed = time.monotonic() - t_call_start
+
+        # 2. Parse JSON
+        t_parse_start = time.monotonic()
         parsed = self._parse_and_repair_json(raw_output)
+        t_parse_elapsed = time.monotonic() - t_parse_start
+
+        # 3. Verify citations
+        t_verify_start = time.monotonic()
         verified = self.verify_batch_citations(parsed, pages)
+        t_verify_elapsed = time.monotonic() - t_verify_start
+
+        t_total_batch = time.monotonic() - t_batch_start
+        logger.info(
+            "Batch %s completed in %.2fs (model call: %.2fs, parse: %.3fs, verify: %.3fs)",
+            page_bounds,
+            t_total_batch,
+            t_call_elapsed,
+            t_parse_elapsed,
+            t_verify_elapsed,
+        )
         return verified

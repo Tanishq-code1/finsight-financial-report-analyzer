@@ -195,18 +195,31 @@ SKIPPED [1] tests\test_embedding_service.py:184: Live Gemini API tests are opt-i
 
 ---
 
-## 6. Production Hotfix: Module Reload Cache Invalidation & AppConfig Resiliency (v1.0.3)
+## 6. Comprehensive Production Hotfix: Runtime Annotations, Extraction Hardening & Streamlit State Management (v1.0.3)
 
-- **Issue Addressed:** Streamlit Community Cloud failed upon Git pull with `AttributeError: 'AppConfig' object has no attribute 'embedding_tpm_limit'` and earlier `embedding_safety_margin`.
-- **Root Cause Analysis:** Streamlit hot-reloads `app.py` in an existing long-running Python process. Python's `sys.modules` maintains previously imported module references across runs, preventing `from financial_report_analyzer.config import load_config` from re-evaluating the updated module on disk. Consequently, older in-memory `AppConfig` class definitions lacked the new rate-pacing dataclass fields. Furthermore, direct attribute access in `app.py` failed without fallback.
-- **Three-Layer Defensive Architecture:**
-  1. **Streamlit Module Cache Busting (`app.py`):** Explicitly purges `financial_report_analyzer.*` from `sys.modules` at script launch on every Streamlit rerun, guaranteeing clean imports from disk. Forces `_SRC_DIR` to `sys.path[0]`.
-  2. **`AppConfig.__getattr__` Fallback (`config.py`):** Implemented dynamic attribute fallback on `AppConfig` returning default rate-pacing values (`embedding_tpm_limit=30000`, `embedding_rpm_limit=60`, `embedding_safety_margin=0.80`, etc.) if an attribute is queried on an older or stripped config instance.
-  3. **Defensive UI & Diagnostics Access (`app.py`):** Replaced direct attribute reads in sidebar Runtime Configuration and Tab 6 Safe Runtime Diagnostics with `getattr(config, "...", default)`.
-- **Properties Hardening:** Updated `safe_diagnostics`, `max_upload_bytes`, and `has_api_key` to access fields via `getattr()` with fallback defaults, ensuring diagnostics never crash.
-- **Verification:**
-  - 171 passed, 1 skipped in pytest suite (added regression tests for `__getattr__` fallback, stripped objects, and diagnostics resilience).
-  - 110/110 passed in offline evaluation benchmark with full baseline regression parity.
+- **Runtime Annotation & Import Name Resolution:**
+  - Diagnosed and fixed Streamlit Community Cloud production failure: `NameError: name 'Optional' is not defined` inside `render_kpi_card` in `app.py`.
+  - Added explicit typing imports (`Optional`, `List`, `Dict`, `Tuple`, `Any`, `Union`, `Callable`) and schema imports (`PageRecord`, `ChunkRecord`, `FinancialMetric`, `RiskItem`, `OutlookItem`, `ReportAnalysis`, `Citation`, `RetrievalResult`, `IndexingResult`, `DocumentMetadata`) at the top of `app.py`.
+  - Moved `render_kpi_card` to module scope so type annotations are parsed at script import time, preventing nested function evaluation failures during Streamlit reruns.
+- **Defensive Multi-State Lifecycle Management:**
+  - Separated conceptual processing stages: `EMPTY`, `PDF_EXTRACTED`, `INDEXING`, `INDEXED`, `FINANCIAL_ANALYSIS_RUNNING`, `FINANCIAL_ANALYSIS_COMPLETE`, and `INDEXING_FAILED`.
+  - In-memory document text and ephemeral ChromaDB vector collections are preserved independently; an extraction failure or timeout never erases or resets an indexed vector store.
+  - Added `analysis_document_id` tracking so UI tab navigation, downloads, or reruns never trigger duplicate extraction API calls.
+  - Automatic document change detection purges prior document session state when a new PDF file is uploaded.
+- **Financial Extraction Latency & Timeout Configuration:**
+  - Investigated extraction latency on dense 10-K tables (~272s on 4 pages).
+  - Introduced `generation_timeout_sec: float = 120.0` across defaults, `AppConfig`, `load_config()`, and `safe_diagnostics`.
+  - Configured `genai.Client` with `http_options=genai_types.HttpOptions(client_args={"timeout": httpx.Timeout(self.timeout_sec, connect=15.0, read=self.timeout_sec)})` across `FinancialExtractor` and `RAGService`.
+  - Added safe step-by-step elapsed timing instrumentation logging model duration, JSON parsing duration, and citation verification duration.
+  - Wrapped `TimeoutError` and `httpx.TimeoutException` into friendly `RAGGenerationError` notifications informing the user that document text remains safely in memory.
+- **Streamlit Deprecation Polish:**
+  - Replaced all 14 occurrences of deprecated `use_container_width=True` on buttons, download buttons, and dataframes with `width="stretch"`, eliminating console warnings.
+- **Export Service Module Skew Defense:**
+  - Introduced `_is_report_analysis` in `export_service.py` to prevent `TypeError: Input must be a valid ReportAnalysis instance` caused by Streamlit script runner class identity changes across hot reloads.
+- **Automated Verification:**
+  - Expanded test suite from 171 to 182 tests (181 passed, 1 skipped opt-in live test).
+  - Added `streamlit.testing.v1.AppTest` regression tests for empty, populated, missing company/period, and error states.
+  - Offline evaluation benchmark: 110/110 gold assertions passed with 100% Quality Gates Passed and baseline PARITY.
 
 ---
 

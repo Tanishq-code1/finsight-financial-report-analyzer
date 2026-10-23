@@ -128,7 +128,15 @@ class RAGService:
                 logger.warning("Initializing RAGService without an active GEMINI_API_KEY")
                 self._client = None
             else:
-                self._client = genai.Client(api_key=self.config.gemini_api_key)
+                try:
+                    import httpx
+                    timeout_val = getattr(self.config, "generation_timeout_sec", 120.0)
+                    http_opts = genai_types.HttpOptions(
+                        client_args={"timeout": httpx.Timeout(timeout_val, connect=15.0, read=timeout_val)}
+                    )
+                    self._client = genai.Client(api_key=self.config.gemini_api_key, http_options=http_opts)
+                except Exception:
+                    self._client = genai.Client(api_key=self.config.gemini_api_key)
 
     @property
     def is_configured(self) -> bool:

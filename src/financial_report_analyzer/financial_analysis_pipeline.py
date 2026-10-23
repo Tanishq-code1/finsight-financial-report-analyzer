@@ -1,5 +1,6 @@
 """Orchestration pipeline for full-report financial extraction, citation verification, and deterministic analysis."""
 
+import time
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Callable, Sequence, Dict, Tuple
@@ -173,6 +174,7 @@ def run_financial_analysis_pipeline(
         Validated ReportAnalysis container.
     """
     app_config = config or load_config()
+    t_pipeline_start = time.monotonic()
 
     if progress_callback:
         progress_callback(0.05, "Inspecting document pages for readable text...")
@@ -213,9 +215,15 @@ def run_financial_analysis_pipeline(
         )
 
     # 2. Partition into bounded batches
+    t_partition_start = time.monotonic()
     batches = partition_pages_into_batches(readable_pages, max_pages=batch_page_size, max_chars=max_batch_chars)
     total_batches = len(batches)
-    logger.info("Partitioned %d readable pages into %d extraction batches", readable_pages_count, total_batches)
+    logger.info(
+        "Partitioned %d readable pages into %d extraction batches in %.3fs",
+        readable_pages_count,
+        total_batches,
+        time.monotonic() - t_partition_start,
+    )
 
     # 3. Initialize or use supplied extractor
     ext = extractor or FinancialExtractor(config=app_config)
@@ -267,13 +275,16 @@ def run_financial_analysis_pipeline(
         progress_callback(0.88, "Deduplicating metrics and computing financial YoY changes...")
 
     # 4. Deduplicate and detect conflicts in metrics
+    t_dedup_start = time.monotonic()
     resolved_metrics, metric_conflicts = deduplicate_and_resolve_metrics(raw_metrics)
 
     # 5. Deduplicate risks and outlook
     resolved_risks = deduplicate_risks(raw_risks)
     resolved_outlook = deduplicate_outlook(raw_outlook)
+    logger.info("Deduplicated metrics, risks, and outlook in %.3fs", time.monotonic() - t_dedup_start)
 
     # 6. Deterministic Python YoY Calculations
+    t_calc_start = time.monotonic()
     calculated_metrics: List[FinancialMetric] = []
     for m in resolved_metrics:
         # Normalize name for clean key lookup
@@ -320,6 +331,8 @@ def run_financial_analysis_pipeline(
         if fcf:
             calculated_metrics.append(fcf)
 
+    logger.info("Completed deterministic calculations in %.3fs", time.monotonic() - t_calc_start)
+
     # 8. Compute citation verification rate
     total_items = len(calculated_metrics) + len(resolved_risks) + len(resolved_outlook)
     verified_items = (
@@ -330,6 +343,7 @@ def run_financial_analysis_pipeline(
     verification_rate = (verified_items / total_items) if total_items > 0 else 1.0
 
     # 9. Synthesize Executive Summary
+    t_synth_start = time.monotonic()
     summary_text, takeaways = synthesize_executive_summary(
         company_name=detected_company,
         fiscal_period=detected_period,
@@ -338,6 +352,7 @@ def run_financial_analysis_pipeline(
         outlook=resolved_outlook,
         summary_snippets=summary_snippets,
     )
+    logger.info("Synthesized executive summary in %.3fs", time.monotonic() - t_synth_start)
 
     # 10. Determine overall status
     if batches_failed == 0 and batches_succeeded > 0:
@@ -346,6 +361,16 @@ def run_financial_analysis_pipeline(
         analysis_status = "partial"
     else:
         analysis_status = "failed"
+
+    pipeline_elapsed = time.monotonic() - t_pipeline_start
+    logger.info(
+        "Financial analysis pipeline finished in %.2fs (status: %s, %d metrics, %d risks, %d outlook)",
+        pipeline_elapsed,
+        analysis_status,
+        len(calculated_metrics),
+        len(resolved_risks),
+        len(resolved_outlook),
+    )
 
     if progress_callback:
         progress_callback(1.0, "Analysis complete.")

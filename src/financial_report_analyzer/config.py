@@ -52,6 +52,7 @@ _DEFAULT_CONFIG_VALUES: Dict[str, Any] = {
     "embedding_max_backoff_sec": 60.0,
     "embedding_batch_size": 1,
     "embedding_deadline_sec": 120.0,
+    "generation_timeout_sec": 120.0,
 }
 
 
@@ -80,6 +81,7 @@ class AppConfig:
     embedding_max_backoff_sec: float = 60.0
     embedding_batch_size: int = 1
     embedding_deadline_sec: float = 120.0
+    generation_timeout_sec: float = 120.0
 
     def __getattr__(self, name: str) -> Any:
         """Provide safe fallback default values if an attribute is missing.
@@ -126,6 +128,7 @@ class AppConfig:
             "embedding_max_backoff_sec": getattr(self, "embedding_max_backoff_sec", 60.0),
             "embedding_batch_size": getattr(self, "embedding_batch_size", 1),
             "embedding_deadline_sec": getattr(self, "embedding_deadline_sec", 120.0),
+            "generation_timeout_sec": getattr(self, "generation_timeout_sec", 120.0),
             "api_key_configured": getattr(self, "has_api_key", False),
         }
 
@@ -230,6 +233,11 @@ def load_config() -> AppConfig:
     except ValueError:
         embedding_deadline_sec = 120.0
 
+    try:
+        generation_timeout_sec = max(5.0, float(_get_setting("GENERATION_TIMEOUT_SEC", "120.0")))
+    except ValueError:
+        generation_timeout_sec = 120.0
+
     return AppConfig(
         gemini_api_key=api_key,
         gemini_generation_model=generation_model,
@@ -252,6 +260,7 @@ def load_config() -> AppConfig:
         embedding_max_backoff_sec=embedding_max_backoff_sec,
         embedding_batch_size=embedding_batch_size,
         embedding_deadline_sec=embedding_deadline_sec,
+        generation_timeout_sec=generation_timeout_sec,
     )
 
 

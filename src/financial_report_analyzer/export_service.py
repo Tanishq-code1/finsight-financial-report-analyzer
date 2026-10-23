@@ -100,6 +100,19 @@ def escape_markdown_table_cell(text: Optional[str]) -> str:
     return s.strip()
 
 
+def _is_report_analysis(obj: Any) -> bool:
+    """Validate whether obj is a ReportAnalysis instance, robust against Streamlit module reloading skew."""
+    if isinstance(obj, ReportAnalysis):
+        return True
+    return (
+        obj is not None
+        and type(obj).__name__ == "ReportAnalysis"
+        and hasattr(obj, "metrics")
+        and hasattr(obj, "risks")
+        and hasattr(obj, "outlook")
+    )
+
+
 def export_analysis_json(
     analysis: ReportAnalysis,
     metadata: Optional[DocumentMetadata] = None,
@@ -110,7 +123,7 @@ def export_analysis_json(
     Validates schema, preserves Decimal precision, formats ISO 8601 timestamps,
     and excludes secrets or environment details.
     """
-    if not isinstance(analysis, ReportAnalysis):
+    if not _is_report_analysis(analysis):
         raise TypeError("Input must be a valid ReportAnalysis instance.")
 
     export_timestamp = datetime.now(timezone.utc).isoformat()
@@ -234,7 +247,7 @@ def export_metrics_csv(
     Implements formula injection defense on untrusted string cells while preserving
     numeric values in calculation columns.
     """
-    if not isinstance(analysis, ReportAnalysis):
+    if not _is_report_analysis(analysis):
         raise TypeError("Input must be a valid ReportAnalysis instance.")
 
     filename = metadata.filename if metadata else (analysis.report_title or "document.pdf")
@@ -305,7 +318,7 @@ def export_risks_csv(
     metadata: Optional[DocumentMetadata] = None,
 ) -> str:
     """Generate a spreadsheet-friendly CSV of disclosed risk factors."""
-    if not isinstance(analysis, ReportAnalysis):
+    if not _is_report_analysis(analysis):
         raise TypeError("Input must be a valid ReportAnalysis instance.")
 
     filename = metadata.filename if metadata else (analysis.report_title or "document.pdf")
@@ -354,7 +367,7 @@ def export_outlook_csv(
     metadata: Optional[DocumentMetadata] = None,
 ) -> str:
     """Generate a spreadsheet-friendly CSV of management forward guidance."""
-    if not isinstance(analysis, ReportAnalysis):
+    if not _is_report_analysis(analysis):
         raise TypeError("Input must be a valid ReportAnalysis instance.")
 
     filename = metadata.filename if metadata else (analysis.report_title or "document.pdf")
@@ -411,7 +424,7 @@ def export_analysis_markdown(
     metadata: Optional[DocumentMetadata] = None,
 ) -> str:
     """Generate a structured, human-readable Markdown analysis report."""
-    if not isinstance(analysis, ReportAnalysis):
+    if not _is_report_analysis(analysis):
         raise TypeError("Input must be a valid ReportAnalysis instance.")
 
     company = analysis.company_name or "Company"

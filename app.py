@@ -3,6 +3,7 @@
 import sys
 import logging
 from pathlib import Path
+from typing import Optional, List, Dict, Tuple, Any, Union, Callable
 
 # Ensure 'src' directory is in sys.path for direct Streamlit Community Cloud execution
 _SRC_DIR = Path(__file__).resolve().parent / "src"
@@ -32,6 +33,18 @@ from financial_report_analyzer.errors import (
     RAGGenerationError,
     CitationValidationError,
     ConfigurationError,
+)
+from financial_report_analyzer.schemas import (
+    PageRecord,
+    ChunkRecord,
+    FinancialMetric,
+    RiskItem,
+    OutlookItem,
+    ReportAnalysis,
+    Citation,
+    RetrievalResult,
+    IndexingResult,
+    DocumentMetadata,
 )
 from financial_report_analyzer.pdf_loader import load_pdf
 from financial_report_analyzer.chunker import chunk_pages, ChunkerConfig
@@ -224,10 +237,56 @@ st.markdown(
 )
 
 
+def render_kpi_card(title: str, m: Optional[FinancialMetric]) -> str:
+    """Render a KPI metric box with YoY change badge and citation tag."""
+    if not m or m.value is None:
+        return f"""
+        <div class="kpi-metric-box">
+            <div class="kpi-title">{title}</div>
+            <div class="kpi-value" style="color: #64748B;">N/A</div>
+            <small style="color: #94A3B8;">Not reported in filing</small>
+        </div>
+        """
+    curr_str = f"{m.currency} " if m.currency else "$"
+    unit_str = f" {m.unit_scale}" if m.unit_scale else ""
+    val_str = f"{curr_str}{m.value:,}{unit_str}" if isinstance(m.value, (int, float)) else f"{curr_str}{m.value}{unit_str}"
+
+    # YoY Badge
+    badge_html = ""
+    if m.yoy_percentage_change is not None:
+        if m.yoy_percentage_change > 0:
+            badge_html = f'<span class="kpi-badge-pos">+{m.yoy_percentage_change:.2f}% YoY</span>'
+        elif m.yoy_percentage_change < 0:
+            badge_html = f'<span class="kpi-badge-neg">{m.yoy_percentage_change:.2f}% YoY</span>'
+        else:
+            badge_html = f'<span class="kpi-badge-neu">0.00% YoY</span>'
+    elif m.yoy_calculation_note and "YoY" in m.yoy_calculation_note:
+        badge_html = f'<span class="kpi-badge-neu">{m.yoy_calculation_note}</span>'
+
+    page_str = f'<span class="citation-tag" style="float: right;">p. {m.source_page}</span>' if m.source_page else ""
+
+    return f"""
+    <div class="kpi-metric-box">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+            <span class="kpi-title">{title}</span>
+            {page_str}
+        </div>
+        <div class="kpi-value">{val_str}</div>
+        <div style="margin-top: 0.4rem;">{badge_html}</div>
+    </div>
+    """
+
+
 def init_session_state() -> None:
     """Initialize active session variables."""
     if "document_id" not in st.session_state:
         st.session_state.document_id = None
+    if "uploaded_filename" not in st.session_state:
+        st.session_state.uploaded_filename = None
+    if "analysis_document_id" not in st.session_state:
+        st.session_state.analysis_document_id = None
+    if "pipeline_stage" not in st.session_state:
+        st.session_state.pipeline_stage = "EMPTY"
     if "report_metadata" not in st.session_state:
         st.session_state.report_metadata = None
     if "page_records" not in st.session_state:
@@ -258,6 +317,8 @@ def init_session_state() -> None:
         st.session_state.analysis_count = 0
     if "indexing_error" not in st.session_state:
         st.session_state.indexing_error = None
+    if "financial_error" not in st.session_state:
+        st.session_state.financial_error = None
 
 
 def clear_report_session() -> None:
@@ -270,6 +331,9 @@ def clear_report_session() -> None:
             logger.warning("Error deleting vector store during reset: %s", str(e))
 
     st.session_state.document_id = None
+    st.session_state.uploaded_filename = None
+    st.session_state.analysis_document_id = None
+    st.session_state.pipeline_stage = "EMPTY"
     st.session_state.report_metadata = None
     st.session_state.page_records = None
     st.session_state.ingestion_result = None
@@ -278,12 +342,12 @@ def clear_report_session() -> None:
     st.session_state.indexing_result = None
     st.session_state.is_indexed = False
     st.session_state.indexing_error = None
+    st.session_state.financial_error = None
     st.session_state.report_analysis = None
     st.session_state.chat_history = []
     st.session_state.search_results = None
     st.session_state.is_processing = False
     st.session_state.status_message = None
-    st.rerun()
 
 
 def main() -> None:
@@ -328,22 +392,34 @@ def main() -> None:
             else:
                 has_valid_upload = True
 
+        # Detect if uploaded file was changed or removed
+        current_filename = uploaded_file.name if uploaded_file else None
+        last_filename = st.session_state.get("uploaded_filename")
+        if last_filename is not None and current_filename != last_filename:
+            logger.info("Uploaded file changed from '%s' to '%s'. Resetting report session.", last_filename, current_filename)
+            clear_report_session()
+
+        if current_filename is not None:
+            st.session_state.uploaded_filename = current_filename
+
         col_analyze, col_clear = st.columns(2)
         with col_analyze:
             analyze_clicked = st.button(
                 "Analyze Report",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=not has_valid_upload or st.session_state.is_processing,
                 help="Extract text, generate chunks, and build ephemeral vector index with token-aware rate pacing.",
             )
         with col_clear:
             clear_clicked = st.button(
                 "Clear Report",
-                on_click=clear_report_session,
-                use_container_width=True,
+                width="stretch",
                 disabled=st.session_state.is_processing,
             )
+            if clear_clicked:
+                clear_report_session()
+                st.rerun()
 
         # Check for partial embedding progress to offer resume
         has_partial_embeddings = False
@@ -359,12 +435,13 @@ def main() -> None:
             resume_clicked = st.button(
                 f"▶️ Resume Indexing ({remaining_chunks} chunks remaining)",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=st.session_state.is_processing,
                 help="Resume embedding the remaining chunks without re-embedding already processed pages in memory.",
             )
             if resume_clicked and config.has_api_key and st.session_state.page_records:
                 st.session_state.is_processing = True
+                st.session_state.pipeline_stage = "INDEXING"
                 p_bar_res = st.progress(0.0)
                 s_text_res = st.empty()
 
@@ -382,6 +459,7 @@ def main() -> None:
                     st.session_state.vector_store = pipeline_output.vector_store
                     st.session_state.indexing_result = pipeline_output.indexing_result
                     st.session_state.is_indexed = True
+                    st.session_state.pipeline_stage = "INDEXED"
                     st.session_state.indexing_error = None
                     p_bar_res.progress(1.0)
                     s_text_res.text("Indexing complete!")
@@ -392,6 +470,7 @@ def main() -> None:
                 except Exception as resume_err:
                     logger.error("Resume indexing failed: %s", str(resume_err))
                     st.session_state.is_indexed = False
+                    st.session_state.pipeline_stage = "INDEXING_FAILED"
                     if st.session_state.vector_store is not None:
                         try:
                             st.session_state.vector_store.delete()
@@ -405,10 +484,15 @@ def main() -> None:
 
         # Explicit Financial Disclosures Analysis action button
         has_extracted_doc = bool(st.session_state.page_records)
+        has_existing_analysis = bool(
+            st.session_state.report_analysis is not None
+            and getattr(st.session_state, "analysis_document_id", None) == st.session_state.document_id
+        )
+        fin_btn_label = "📊 Extract Financials (KPIs & Risks)" if not has_existing_analysis else "🔄 Re-extract Financials"
         fin_btn_clicked = st.button(
-            "📊 Extract Financials (KPIs & Risks)",
+            fin_btn_label,
             type="secondary",
-            use_container_width=True,
+            width="stretch",
             disabled=not has_extracted_doc or st.session_state.is_processing,
             help="Extract structured KPIs, balance sheet items, disclosed risks, management outlook, and calculate YoY changes.",
         )
@@ -416,7 +500,7 @@ def main() -> None:
         if fin_btn_clicked and has_extracted_doc:
             if not config.has_api_key:
                 st.error("Gemini API key is required to analyze financials. Please set GEMINI_API_KEY in .env or settings.")
-            elif st.session_state.analysis_count >= config.session_analysis_budget:
+            elif st.session_state.analysis_count >= getattr(config, "session_analysis_budget", 5):
                 st.warning(
                     f"Session analysis budget reached ({config.session_analysis_budget}/{config.session_analysis_budget} analyses). "
                     "This budget manages external model costs on the public demo. Clear report or reset the session to restart."
@@ -424,6 +508,8 @@ def main() -> None:
             else:
                 st.session_state.analysis_count += 1
                 st.session_state.is_processing = True
+                st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_RUNNING"
+                st.session_state.financial_error = None
                 p_bar = st.progress(0.0)
                 s_text = st.empty()
 
@@ -439,6 +525,8 @@ def main() -> None:
                         progress_callback=update_fin_p,
                     )
                     st.session_state.report_analysis = analysis
+                    st.session_state.analysis_document_id = st.session_state.document_id
+                    st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
                     s_text.text("Financial extraction complete!")
                     st.success(
                         f"Financial Analysis Ready: Extracted {len(analysis.metrics)} metrics, "
@@ -446,7 +534,9 @@ def main() -> None:
                     )
                 except Exception as fin_err:
                     logger.error("Financial analysis pipeline error: %s", str(fin_err), exc_info=True)
-                    st.error(f"Financial Analysis Error: {str(fin_err)}")
+                    st.session_state.financial_error = getattr(fin_err, "user_friendly_message", str(fin_err))
+                    st.session_state.pipeline_stage = "INDEXED" if st.session_state.is_indexed else "PDF_EXTRACTED"
+                    st.error(f"Financial Analysis Error: {st.session_state.financial_error}")
                 finally:
                     st.session_state.is_processing = False
 
@@ -707,44 +797,6 @@ def main() -> None:
 
                 kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
 
-                def render_kpi_card(title: str, m: Optional[FinancialMetric]) -> str:
-                    if not m or m.value is None:
-                        return f"""
-                        <div class="kpi-metric-box">
-                            <div class="kpi-title">{title}</div>
-                            <div class="kpi-value" style="color: #64748B;">N/A</div>
-                            <small style="color: #94A3B8;">Not reported in filing</small>
-                        </div>
-                        """
-                    curr_str = f"{m.currency} " if m.currency else "$"
-                    unit_str = f" {m.unit_scale}" if m.unit_scale else ""
-                    val_str = f"{curr_str}{m.value:,}{unit_str}" if isinstance(m.value, (int, float)) else f"{curr_str}{m.value}{unit_str}"
-
-                    # YoY Badge
-                    badge_html = ""
-                    if m.yoy_percentage_change is not None:
-                        if m.yoy_percentage_change > 0:
-                            badge_html = f'<span class="kpi-badge-pos">+{m.yoy_percentage_change:.2f}% YoY</span>'
-                        elif m.yoy_percentage_change < 0:
-                            badge_html = f'<span class="kpi-badge-neg">{m.yoy_percentage_change:.2f}% YoY</span>'
-                        else:
-                            badge_html = f'<span class="kpi-badge-neu">0.00% YoY</span>'
-                    elif m.yoy_calculation_note and "YoY" in m.yoy_calculation_note:
-                        badge_html = f'<span class="kpi-badge-neu">{m.yoy_calculation_note}</span>'
-
-                    page_str = f'<span class="citation-tag" style="float: right;">p. {m.source_page}</span>' if m.source_page else ""
-
-                    return f"""
-                    <div class="kpi-metric-box">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
-                            <span class="kpi-title">{title}</span>
-                            {page_str}
-                        </div>
-                        <div class="kpi-value">{val_str}</div>
-                        <div style="margin-top: 0.4rem;">{badge_html}</div>
-                    </div>
-                    """
-
                 with kpi_col1:
                     st.markdown(render_kpi_card("Total Revenue", rev), unsafe_allow_html=True)
                 with kpi_col2:
@@ -796,7 +848,7 @@ def main() -> None:
                         data=json_data,
                         file_name=json_name,
                         mime="application/json",
-                        use_container_width=True,
+                        width="stretch",
                         help="Complete structured machine-readable analysis with full provenance.",
                     )
                 with exp_col2:
@@ -807,7 +859,7 @@ def main() -> None:
                         data=csv_metrics_data,
                         file_name=csv_metrics_name,
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                         help="Financial metrics table with Python YoY changes and formula injection protection.",
                     )
                 with exp_col3:
@@ -818,7 +870,7 @@ def main() -> None:
                         data=csv_risks_data,
                         file_name=csv_risks_name,
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                         help="Disclosed risk factors with categories and stated mitigations.",
                     )
                 with exp_col4:
@@ -829,7 +881,7 @@ def main() -> None:
                         data=csv_outlook_data,
                         file_name=csv_outlook_name,
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                         help="Management forward guidance, target periods, and qualitative commentary.",
                     )
                 with exp_col5:
@@ -840,7 +892,7 @@ def main() -> None:
                         data=md_data,
                         file_name=md_name,
                         mime="text/markdown",
-                        use_container_width=True,
+                        width="stretch",
                         help="Formatted executive Markdown document suitable for sharing.",
                     )
 
@@ -849,6 +901,8 @@ def main() -> None:
                         for lim in analysis.limitations:
                             st.caption(f"• {lim}")
             else:
+                if st.session_state.financial_error:
+                    st.warning(f"⚠️ **Prior Extraction Notice:** {st.session_state.financial_error}")
                 st.markdown(
                     """
                     <div class="empty-card">
@@ -862,11 +916,12 @@ def main() -> None:
                     "📊 Extract Financial Disclosures Now",
                     type="primary",
                     key="btn_run_fin_tab1",
+                    width="stretch",
                     disabled=st.session_state.is_processing,
                 ):
                     if not config.has_api_key:
                         st.error("Gemini API key is required to analyze financials. Please set GEMINI_API_KEY in .env or settings.")
-                    elif st.session_state.analysis_count >= config.session_analysis_budget:
+                    elif st.session_state.analysis_count >= getattr(config, "session_analysis_budget", 5):
                         st.warning(
                             f"Session analysis budget reached ({config.session_analysis_budget}/{config.session_analysis_budget} analyses). "
                             "This budget manages external model costs on the public demo. Clear report or reset the session to restart."
@@ -874,6 +929,8 @@ def main() -> None:
                     else:
                         st.session_state.analysis_count += 1
                         st.session_state.is_processing = True
+                        st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_RUNNING"
+                        st.session_state.financial_error = None
                         with st.spinner("Analyzing document batches and calculating YoY metrics in Python..."):
                             try:
                                 analysis_res = run_financial_analysis_pipeline(
@@ -882,9 +939,14 @@ def main() -> None:
                                     config=config,
                                 )
                                 st.session_state.report_analysis = analysis_res
+                                st.session_state.analysis_document_id = st.session_state.document_id
+                                st.session_state.pipeline_stage = "FINANCIAL_ANALYSIS_COMPLETE"
                                 st.rerun()
                             except Exception as run_err:
-                                st.error(f"Extraction failed: {str(run_err)}")
+                                logger.error("Tab 1 extraction run error: %s", str(run_err), exc_info=True)
+                                st.session_state.financial_error = getattr(run_err, "user_friendly_message", str(run_err))
+                                st.session_state.pipeline_stage = "INDEXED" if st.session_state.is_indexed else "PDF_EXTRACTED"
+                                st.error(f"Extraction failed: {st.session_state.financial_error}")
                             finally:
                                 st.session_state.is_processing = False
 
@@ -933,13 +995,13 @@ def main() -> None:
             st.markdown("**Suggested Research Questions:**")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                q1 = st.button("📊 Revenue Drivers", use_container_width=True, disabled=st.session_state.is_processing)
+                q1 = st.button("📊 Revenue Drivers", width="stretch", disabled=st.session_state.is_processing)
             with col2:
-                q2 = st.button("💵 Cash Flow vs Net Income", use_container_width=True, disabled=st.session_state.is_processing)
+                q2 = st.button("💵 Cash Flow vs Net Income", width="stretch", disabled=st.session_state.is_processing)
             with col3:
-                q3 = st.button("⚠️ Disclosed Risk Factors", use_container_width=True, disabled=st.session_state.is_processing)
+                q3 = st.button("⚠️ Disclosed Risk Factors", width="stretch", disabled=st.session_state.is_processing)
             with col4:
-                q4 = st.button("🔮 Forward Guidance", use_container_width=True, disabled=st.session_state.is_processing)
+                q4 = st.button("🔮 Forward Guidance", width="stretch", disabled=st.session_state.is_processing)
 
             preset_question = None
             if q1:
@@ -1144,7 +1206,7 @@ def main() -> None:
                     data=csv_m_bytes,
                     file_name=csv_m_name,
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                     help="Download financial metrics table as a spreadsheet-ready CSV.",
                 )
 
@@ -1186,7 +1248,7 @@ def main() -> None:
                         }
                     )
 
-                st.dataframe(pd.DataFrame(df_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(df_rows), width="stretch", hide_index=True)
 
                 st.markdown("#### Itemized Metric Provenance & Quotations")
                 for m in analysis.metrics:
@@ -1261,7 +1323,7 @@ def main() -> None:
                             data=csv_r_bytes,
                             file_name=csv_r_name,
                             mime="text/csv",
-                            use_container_width=True,
+                            width="stretch",
                         )
                 if not analysis.risks:
                     st.info("No material risk factors identified in analyzed pages.")
@@ -1305,7 +1367,7 @@ def main() -> None:
                             data=csv_o_bytes,
                             file_name=csv_o_name,
                             mime="text/csv",
-                            use_container_width=True,
+                            width="stretch",
                         )
                 if not analysis.outlook:
                     st.info("No forward-looking guidance or outlook items identified.")
@@ -1434,7 +1496,7 @@ def main() -> None:
                     }
                     for c in chunks[:100]  # Display up to 100 for responsive UI
                 ]
-                st.dataframe(pd.DataFrame(chunk_data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(chunk_data), width="stretch", hide_index=True)
 
             # Display Page Breakdown Table
             if st.session_state.page_records:
@@ -1448,7 +1510,7 @@ def main() -> None:
                     }
                     for p in st.session_state.page_records
                 ]
-                st.dataframe(pd.DataFrame(breakdown_data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(breakdown_data), width="stretch", hide_index=True)
 
     # Tab 6: About & Methodology
     with tab_about:
@@ -1480,6 +1542,7 @@ def main() -> None:
         tpm_lim = getattr(config, "embedding_tpm_limit", 30000)
         safe_margin = getattr(config, "embedding_safety_margin", 0.80)
         rpm_lim = getattr(config, "embedding_rpm_limit", 60)
+        gen_timeout = getattr(config, "generation_timeout_sec", 120.0)
         top_k = getattr(config, "retrieval_top_k", 5)
         qa_b = getattr(config, "session_qa_budget", 25)
         an_b = getattr(config, "session_analysis_budget", 5)
@@ -1506,7 +1569,7 @@ def main() -> None:
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
                         Max Size: <strong>{max_mb} MB</strong> ({max_p} pages)<br/>
                         Token Pacer: <strong>{tpm_lim:,} TPM</strong> ({int(safe_margin * 100)}% margin)<br/>
-                        Request Rate: <strong>{rpm_lim} RPM</strong> (Top-K: {top_k})
+                        Request Rate: <strong>{rpm_lim} RPM</strong> (Timeout: {int(gen_timeout)}s)
                     </div>
                 </div>
                 """,
