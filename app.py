@@ -1,6 +1,14 @@
 """Financial Report Analyzer — Main Streamlit Application."""
 
+import sys
 import logging
+from pathlib import Path
+
+# Ensure 'src' directory is in sys.path for direct Streamlit Community Cloud execution
+_SRC_DIR = Path(__file__).resolve().parent / "src"
+if _SRC_DIR.exists() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import streamlit as st
 import pandas as pd
 
@@ -235,6 +243,10 @@ def init_session_state() -> None:
         st.session_state.is_processing = False
     if "status_message" not in st.session_state:
         st.session_state.status_message = None
+    if "qa_count" not in st.session_state:
+        st.session_state.qa_count = 0
+    if "analysis_count" not in st.session_state:
+        st.session_state.analysis_count = 0
 
 
 def clear_report_session() -> None:
@@ -310,11 +322,16 @@ def main() -> None:
                 "Analyze Report",
                 type="primary",
                 use_container_width=True,
-                disabled=not has_valid_upload,
+                disabled=not has_valid_upload or st.session_state.is_processing,
                 help="Extract text, generate chunks, and build ephemeral vector index.",
             )
         with col_clear:
-            clear_clicked = st.button("Clear Report", on_click=clear_report_session, use_container_width=True)
+            clear_clicked = st.button(
+                "Clear Report",
+                on_click=clear_report_session,
+                use_container_width=True,
+                disabled=st.session_state.is_processing,
+            )
 
         # Explicit Financial Disclosures Analysis action button
         has_extracted_doc = bool(st.session_state.page_records)
@@ -329,7 +346,13 @@ def main() -> None:
         if fin_btn_clicked and has_extracted_doc:
             if not config.has_api_key:
                 st.error("Gemini API key is required to analyze financials. Please set GEMINI_API_KEY in .env or settings.")
+            elif st.session_state.analysis_count >= config.session_analysis_budget:
+                st.warning(
+                    f"Session analysis budget reached ({config.session_analysis_budget}/{config.session_analysis_budget} analyses). "
+                    "This budget manages external model costs on the public demo. Clear report or reset the session to restart."
+                )
             else:
+                st.session_state.analysis_count += 1
                 st.session_state.is_processing = True
                 p_bar = st.progress(0.0)
                 s_text = st.empty()
@@ -453,6 +476,18 @@ def main() -> None:
         st.caption(f"**Chunk Size:** `{config.chunk_size_tokens} tokens` (overlap {config.chunk_overlap_tokens})")
         st.caption(f"**Retrieval Top-K:** `{config.retrieval_top_k}`")
 
+        st.divider()
+        st.caption("🛡️ **Demo Abuse & Cost Safeguards**")
+        st.caption(
+            f"• Session Inquiries: **{st.session_state.qa_count} / {config.session_qa_budget}**\n\n"
+            f"• Financial Analyses: **{st.session_state.analysis_count} / {config.session_analysis_budget}**\n\n"
+            f"• Max Upload Size: **{config.max_upload_mb} MB** ({config.max_pdf_pages} pages max)"
+        )
+        st.caption(
+            "External Google Gemini API requests are rate- and budget-bounded per active session. "
+            "In-memory session limits manage portfolio demo usage; provider quotas and billing alerts control overall host spending."
+        )
+
     # Main Canvas Header
     st.markdown('<div class="main-header">Financial Report Analyzer</div>', unsafe_allow_html=True)
     st.markdown(
@@ -464,9 +499,9 @@ def main() -> None:
     st.markdown(
         """
         <div class="disclaimer-badge">
-            <strong>Notice & Disclaimer:</strong> FinSight is an informational research aid and document-understanding tool, 
-            <strong>NOT investment advice or an audit opinion</strong>. Upload only public corporate filings. 
-            All extracted insights should be cross-verified with official regulatory filings.
+            <strong>Notice & Non-Investment Disclaimer:</strong> FinSight is an AI-assisted financial-report analysis portfolio application 
+            that provides source-linked answers and structured financial disclosures. Outputs can be incomplete or incorrect and should 
+            be checked against the original report. <strong>NOT investment advice or an audit opinion</strong>. Upload only public corporate filings.
         </div>
         """,
         unsafe_allow_html=True,
@@ -704,10 +739,22 @@ def main() -> None:
                     """,
                     unsafe_allow_html=True,
                 )
-                if st.button("📊 Extract Financial Disclosures Now", type="primary", key="btn_run_fin_tab1"):
+                if st.button(
+                    "📊 Extract Financial Disclosures Now",
+                    type="primary",
+                    key="btn_run_fin_tab1",
+                    disabled=st.session_state.is_processing,
+                ):
                     if not config.has_api_key:
                         st.error("Gemini API key is required to analyze financials. Please set GEMINI_API_KEY in .env or settings.")
+                    elif st.session_state.analysis_count >= config.session_analysis_budget:
+                        st.warning(
+                            f"Session analysis budget reached ({config.session_analysis_budget}/{config.session_analysis_budget} analyses). "
+                            "This budget manages external model costs on the public demo. Clear report or reset the session to restart."
+                        )
                     else:
+                        st.session_state.analysis_count += 1
+                        st.session_state.is_processing = True
                         with st.spinner("Analyzing document batches and calculating YoY metrics in Python..."):
                             try:
                                 analysis_res = run_financial_analysis_pipeline(
@@ -719,6 +766,8 @@ def main() -> None:
                                 st.rerun()
                             except Exception as run_err:
                                 st.error(f"Extraction failed: {str(run_err)}")
+                            finally:
+                                st.session_state.is_processing = False
 
     # Tab 2: Ask the Report (Source-Grounded RAG Q&A & Diagnostic Vector Search)
     with tab_qa:
@@ -753,13 +802,13 @@ def main() -> None:
             st.markdown("**Suggested Research Questions:**")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                q1 = st.button("📊 Revenue Drivers", use_container_width=True)
+                q1 = st.button("📊 Revenue Drivers", use_container_width=True, disabled=st.session_state.is_processing)
             with col2:
-                q2 = st.button("💵 Cash Flow vs Net Income", use_container_width=True)
+                q2 = st.button("💵 Cash Flow vs Net Income", use_container_width=True, disabled=st.session_state.is_processing)
             with col3:
-                q3 = st.button("⚠️ Disclosed Risk Factors", use_container_width=True)
+                q3 = st.button("⚠️ Disclosed Risk Factors", use_container_width=True, disabled=st.session_state.is_processing)
             with col4:
-                q4 = st.button("🔮 Forward Guidance", use_container_width=True)
+                q4 = st.button("🔮 Forward Guidance", use_container_width=True, disabled=st.session_state.is_processing)
 
             preset_question = None
             if q1:
@@ -781,9 +830,9 @@ def main() -> None:
                 )
                 col_btn1, col_btn2 = st.columns([5, 1])
                 with col_btn1:
-                    submit_qa = st.form_submit_button("Ask Question", type="primary")
+                    submit_qa = st.form_submit_button("Ask Question", type="primary", disabled=st.session_state.is_processing)
                 with col_btn2:
-                    clear_history = st.form_submit_button("Clear History")
+                    clear_history = st.form_submit_button("Clear History", disabled=st.session_state.is_processing)
 
             if clear_history:
                 st.session_state.chat_history = []
@@ -796,33 +845,43 @@ def main() -> None:
                 active_q = preset_question
 
             if active_q:
-                with st.spinner("Analyzing report evidence and generating grounded response..."):
-                    try:
-                        embedder = EmbeddingService(config=config)
-                        rag_service = RAGService(config=config)
-                        answer, retrieved = rag_service.answer_question(
-                            question=active_q,
-                            vector_store=st.session_state.vector_store,
-                            embedding_service=embedder,
-                            document_id=st.session_state.document_id,
-                            top_k=config.retrieval_top_k,
-                            min_evidence_threshold=config.min_evidence_threshold,
-                        )
-                        # Prepend to chat history for chronological reverse display
-                        st.session_state.chat_history.insert(
-                            0,
-                            {
-                                "question": active_q,
-                                "answer": answer,
-                                "retrieved_chunks": retrieved,
-                            },
-                        )
-                    except (ConfigurationError, RetrievalError, RAGGenerationError) as rag_err:
-                        logger.error("RAG error: %s", str(rag_err))
-                        st.error(f"Question Answering Error: {rag_err.user_friendly_message}")
-                    except Exception as exc:
-                        logger.critical("Unexpected error in RAG Q&A: %s", str(exc), exc_info=True)
-                        st.error("An unexpected error occurred while processing your question.")
+                if st.session_state.qa_count >= config.session_qa_budget:
+                    st.warning(
+                        f"Session question budget reached ({config.session_qa_budget}/{config.session_qa_budget} questions). "
+                        "This budget protects the public demo from quota exhaustion. Please click 'Clear Report' or refresh the page to start a new session."
+                    )
+                else:
+                    st.session_state.qa_count += 1
+                    st.session_state.is_processing = True
+                    with st.spinner("Analyzing report evidence and generating grounded response..."):
+                        try:
+                            embedder = EmbeddingService(config=config)
+                            rag_service = RAGService(config=config)
+                            answer, retrieved = rag_service.answer_question(
+                                question=active_q,
+                                vector_store=st.session_state.vector_store,
+                                embedding_service=embedder,
+                                document_id=st.session_state.document_id,
+                                top_k=config.retrieval_top_k,
+                                min_evidence_threshold=config.min_evidence_threshold,
+                            )
+                            # Prepend to chat history for chronological reverse display
+                            st.session_state.chat_history.insert(
+                                0,
+                                {
+                                    "question": active_q,
+                                    "answer": answer,
+                                    "retrieved_chunks": retrieved,
+                                },
+                            )
+                        except (ConfigurationError, RetrievalError, RAGGenerationError) as rag_err:
+                            logger.error("RAG error: %s", str(rag_err))
+                            st.error(f"Question Answering Error: {rag_err.user_friendly_message}")
+                        except Exception as exc:
+                            logger.critical("Unexpected error in RAG Q&A: %s", str(exc), exc_info=True)
+                            st.error("An unexpected error occurred while processing your question.")
+                        finally:
+                            st.session_state.is_processing = False
 
             # Render Chat History
             if st.session_state.chat_history:
@@ -1247,25 +1306,97 @@ def main() -> None:
 
     # Tab 6: About & Methodology
     with tab_about:
-        st.subheader("Architecture & Methodology")
+        st.subheader("FinSight — Architecture, Diagnostics & Release Information")
+
+        # Application Version & Release Identifier Banner
         st.markdown(
             """
-            ### System Design
+            <div class="metric-card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h4 style="margin: 0; color: #38BDF8;">FinSight v1.0.0 — Production Portfolio Release</h4>
+                    <span class="tag-pill" style="border-color: #38BDF8; color: #38BDF8;">Build: Release 1.0.0</span>
+                </div>
+                <p style="margin-top: 0.5rem; color: #94A3B8; font-size: 0.9rem;">
+                    Source-grounded financial intelligence engine engineered for public 10-K, 10-Q, and annual report analysis.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.subheader("Safe Runtime Diagnostics")
+        diag_col1, diag_col2, diag_col3 = st.columns(3)
+        with diag_col1:
+            st.markdown(
+                f"""
+                <div class="kpi-metric-box">
+                    <div class="kpi-title">Configured Models</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
+                        LLM: <code>{config.gemini_generation_model}</code><br/>
+                        Embeddings: <code>{config.gemini_embedding_model}</code> ({config.embedding_dimension}D)
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with diag_col2:
+            st.markdown(
+                f"""
+                <div class="kpi-metric-box">
+                    <div class="kpi-title">Ingestion & Processing Limits</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
+                        Max Size: <strong>{config.max_upload_mb} MB</strong><br/>
+                        Max Pages: <strong>{config.max_pdf_pages} pages</strong><br/>
+                        Retrieval Top-K: <strong>{config.retrieval_top_k} passages</strong>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with diag_col3:
+            st.markdown(
+                f"""
+                <div class="kpi-metric-box">
+                    <div class="kpi-title">Demo Session Safeguards</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
+                        Q&A Budget: <strong>{st.session_state.qa_count} / {config.session_qa_budget}</strong><br/>
+                        Analysis Budget: <strong>{st.session_state.analysis_count} / {config.session_analysis_budget}</strong><br/>
+                        Credentials: <strong>{'Configured' if config.has_api_key else 'Not Configured'}</strong>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            """
+            ### System Design & Pipeline Architecture
             The **Financial Report Analyzer** transforms unstructured corporate PDFs into verifiable financial intelligence:
-            - **PDF Extraction**: Page-aware in-memory parsing via `PyMuPDF` preserving 1-based page indices.
-            - **Chunking**: Sentence-boundary-aware chunking (~850 target tokens with 120 token overlap).
+            - **PDF Extraction**: Page-aware in-memory parsing via `PyMuPDF` preserving 1-based page indices and tabular layouts.
+            - **Sentence-Aware Chunking**: Context-preserving sentence-boundary chunking (~850 target tokens with 120 token overlap).
             - **Vector Index**: Isolated in-memory ephemeral ChromaDB collection per active user session.
             - **Embeddings**: Google GenAI `gemini-embedding-2` embedding vectors (768 dimensions).
-            - **RAG & Citations**: Strict prompt grounding with exact page and quotation verification.
-            - **Data Integrity**: Financial metrics retain period, currency, scale, and calculation flags; missing metrics are never represented as zero.
+            - **RAG & Citation Verification**: Strict source-grounding prompt with independent page and quotation verification.
+            - **Deterministic Calculations**: Python `Decimal` calculates YoY percentages, absolute changes, and Free Cash Flow; zero-denominators and currency mismatches are handled gracefully.
+            - **Multi-Format Exports**: JSON, CSV, and Markdown exports generated in-memory with spreadsheet formula injection defense (OWASP compliant).
 
-            ### Privacy & Security
-            - Uploaded files are processed in-memory and not stored persistently in the MVP.
-            - Active vector indices are ephemeral and isolated to the browser session.
-            - Uploaded text is transmitted to the configured Google Gemini API for embedding and generation.
+            ### Evaluation Methodology & Quality Scorecard
+            FinSight includes an automated, offline evaluation benchmark (`evals/runner.py`) running against a gold dataset of synthetic financial filings:
+            - **Synthetic Benchmark**: 110 gold assertions measuring retrieval Recall@k, Citation Precision, Page Accuracy, Metric Extraction, and Abstention Contingency.
+            - **Deterministic Offline Testing**: The offline test suite and benchmark execute without network calls or external API charges.
+            - **Important Accuracy Limitation**: Offline benchmark parity verifies code pathways and deterministic contracts; it does **not** guarantee 100% real-world accuracy on complex or novel filings. Real-world results are subject to document layout variance and model behavior.
 
-            ### Disclaimer
-            This tool is designed for research and study of public company filings. It does not provide investment advice, stock recommendations, or audit opinions. Always consult original filings submitted to regulatory authorities.
+            ### Privacy, Ephemeral Processing & Memory Safety
+            - Uploaded files are processed in-memory and are not written to persistent disk storage.
+            - Vector collections are ephemeral and isolated to the active session; clearing the report removes active collection references.
+            - No database, cookies, or tracking identifiers are used.
+            - Uploaded text is transmitted to the configured Google Gemini API endpoint for embedding and generation.
+
+            ### Disclaimers & Intended Use
+            This software is an AI-assisted research aid designed for exploring public corporate filings.
+            - **NOT Investment Advice:** FinSight does not provide investment recommendations, buy/sell guidance, or tax/legal advice.
+            - **NOT an Audit Opinion:** Extracted figures and calculated comparisons do not substitute for official audited financial statements.
+            - **Always Verify:** Users must cross-verify all material figures, citations, and risk disclosures against official regulatory filings (such as SEC EDGAR submissions).
             """
         )
 

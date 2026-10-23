@@ -2,20 +2,25 @@
 
 A modular, source-grounded Financial Report Analyzer that ingests annual (10-K) and quarterly (10-Q) PDF filings to generate executive summaries, structured KPI extractions, and natural-language question answering with verifiable citations and source excerpts.
 
+> **Notice & Non-Investment Disclaimer:**  
+> FinSight is an AI-assisted financial-report analysis portfolio application that provides source-linked answers and structured financial disclosures. Outputs can be incomplete or incorrect and should be checked against the original report. **NOT investment advice or an audit opinion**. Upload only public corporate filings.
+
 ---
 
 ## Key Features
 
 1. **Page-Aware Document Ingestion**: In-memory parsing via PyMuPDF with 1-based page index preservation and scan detection.
 2. **Page-Scoped Sentence-Aware Chunking**: Splits text along sentence and paragraph boundaries (~850 target tokens, 120 overlap) while keeping chunks strictly within their source page for unambiguous citation provenance.
-3. **Session-Isolated Ephemeral Vector Store**: Ephemeral ChromaDB indexing per active user session; no global cross-user document leakage.
+3. **Session-Isolated Ephemeral Vector Store**: Ephemeral ChromaDB indexing per active user session; zero cross-session or persistent disk document leakage.
 4. **Google GenAI Embeddings**: Embeds chunks and search queries using Google's `gemini-embedding-2` model (768-dimensional vectors) with asymmetric retrieval prefixes (`title: ... | text: ...` and `task: question answering | query: ...`).
-5. **Strictly Grounded RAG Q&A**: Answers questions solely from retrieved passages, with defense against embedded prompt injections (Phase 4).
+5. **Strictly Grounded RAG Q&A**: Answers questions solely from retrieved passages, with defense against embedded prompt injections.
 6. **Verifiable Citations**: Every factual claim is traceable to a specific chunk and page, accompanied by verified source excerpts.
 7. **Structured Financial Intelligence**: Extracts reported financial metrics (Revenue, Operating Income, Net Income, Cash Flow, Capex, Cash, Debt, EPS) without inventing figures. Missing metrics are never represented as zero.
 8. **Disclosed Risks & Management Outlook**: Separates factual risk disclosures and forward-looking guidance from model speculation.
-9. **Multi-Format Exports**: Download results in JSON, CSV, or Markdown formats with CSV formula injection defense.
-10. **Reproducible Evaluation Benchmark**: 110-case versioned gold dataset (1.0.0) measuring retrieval Recall@k, MRR, citation precision, evidence abstention, Decimal arithmetic, and export fidelity.
+9. **Deterministic Decimal Arithmetic**: Python `Decimal` computes year-over-year (YoY) percentage changes, scale adjustments, and Free Cash Flow (`Operating Cash Flow - Capex`).
+10. **Multi-Format In-Memory Exports**: Download results in JSON, CSV, or Markdown formats with spreadsheet formula injection defense (OWASP compliant).
+11. **Demo Abuse & Cost Safeguards**: Per-session Q&A budgets (`SESSION_QA_BUDGET`), analysis budgets (`SESSION_ANALYSIS_BUDGET`), and bounded exponential backoff on Gemini API calls.
+12. **Reproducible Evaluation Benchmark**: 110-case versioned gold dataset (`1.0.0`) measuring retrieval Recall@k, MRR, citation precision, evidence abstention, Decimal arithmetic, and export fidelity.
 
 ---
 
@@ -44,17 +49,17 @@ Session-Isolated Ephemeral ChromaDB Client (vector_store.py: cosine metric)
         │
         ├───────────────────────────────┐
         ▼                               ▼
-RAG Question Answering (Phase 4) Structured Extraction Service (Phase 5)
+RAG Question Answering           Structured Extraction Service
         │                               │
         ▼                               ▼
-Retrieve Passages (Top-k)       Pydantic Validation
+Retrieve Passages (Top-k)       Pydantic Schema Validation
         │                               │
         ▼                               ▼
-Generate Grounded Answer        Compute YoY Growth (Deterministic Python)
+Generate Grounded Answer        Compute YoY Growth (Deterministic Python Decimal)
         │                               │
         └───────────────┬───────────────┘
                         ▼
-Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
+Citations, Metrics Table, Risk/Outlook, In-Memory JSON/CSV/MD Exports
 ```
 
 ---
@@ -62,7 +67,7 @@ Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
 ## Local Setup & Quickstart
 
 ### Prerequisites
-- Python 3.11, 3.12, or 3.13
+- Python 3.11, 3.12, or 3.13 (Python 3.12 is the primary cloud deployment target)
 - A Google Gemini API Key ([Google AI Studio](https://aistudio.google.com/))
 
 ### Installation
@@ -75,7 +80,7 @@ Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
 2. **Create and activate a virtual environment:**
    ```bash
    python -m venv .venv
-   # Windows:
+   # Windows (PowerShell):
    .venv\Scripts\activate
    # Linux/macOS:
    source .venv/bin/activate
@@ -96,6 +101,8 @@ Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
    GEMINI_GENERATION_MODEL=gemini-3.8-flash
    GEMINI_EMBEDDING_MODEL=gemini-embedding-2
    GEMINI_EMBEDDING_DIMENSION=768
+   SESSION_QA_BUDGET=25
+   SESSION_ANALYSIS_BUDGET=5
    ```
 
 5. **Run the Streamlit application:**
@@ -105,9 +112,112 @@ Citations, Metrics Table, Risk/Outlook, JSON/CSV Exports
 
 ---
 
+## Streamlit Community Cloud Deployment Guide
+
+Follow this step-by-step checklist to deploy FinSight to **Streamlit Community Cloud**:
+
+### 1. Confirm the Local Repository is Clean
+Ensure all code, tests, and configuration changes are committed, and no untracked or secret files are present:
+```bash
+git status --short --branch
+# Ensure output indicates a clean working tree on master
+```
+
+### 2. Create or Select the GitHub Repository
+1. Log in to [GitHub](https://github.com/).
+2. Create a new repository (e.g., `finsight-financial-report-analyzer`). Set visibility to **Public** (for Community Cloud hosting) or **Private** (if using connected private repo permissions).
+3. Do **not** initialize with a default README or `.gitignore` (this repository already provides both).
+
+### 3. Add Remote and Push to GitHub
+```bash
+git remote add origin https://github.com/<your-username>/finsight-financial-report-analyzer.git
+git branch -M master
+git push -u origin master
+```
+
+### 4. Open Streamlit Community Cloud
+Navigate to [share.streamlit.io](https://share.streamlit.io/) and log in with your GitHub account.
+
+### 5. Connect the Repository
+1. Click **New app**.
+2. Select your repository: `<your-username>/finsight-financial-report-analyzer`.
+3. Set the branch to `master`.
+
+### 6. Specify the Application Entry Point
+In the **Main file path** field, enter:
+```text
+app.py
+```
+
+### 7. Choose Python Version in Advanced Settings
+Click **Advanced settings...** and ensure the runtime is set to **Python 3.12** (supported default).
+
+### 8. Provide Secrets in Streamlit Cloud Settings
+Under **Secrets** in Advanced Settings (or in the App Dashboard under **Settings -> Secrets**), paste your configuration:
+```toml
+# =====================================================================
+# FinSight — Streamlit Community Cloud Secrets
+# =====================================================================
+
+GEMINI_API_KEY = "YOUR_ACTUAL_GEMINI_API_KEY"
+GEMINI_GENERATION_MODEL = "gemini-3.8-flash"
+GEMINI_EMBEDDING_MODEL = "gemini-embedding-2"
+GEMINI_EMBEDDING_DIMENSION = 768
+
+# Document & Ingestion Limits
+MAX_UPLOAD_MB = 25
+MAX_PDF_PAGES = 250
+RETRIEVAL_TOP_K = 5
+MIN_EVIDENCE_THRESHOLD = 0.35
+
+# Public Demo Abuse & Cost Safeguards
+SESSION_QA_BUDGET = 25
+SESSION_ANALYSIS_BUDGET = 5
+LOG_LEVEL = "INFO"
+```
+> **Security Rule:** Never commit secrets to source control. Streamlit Community Cloud securely injects these secrets into the application runtime without writing them to disk.
+
+### 9. Deploy and Launch the Application
+Click **Deploy!** Streamlit Community Cloud will provision the container, install packages from `requirements.txt`, and start the app at `https://<your-subdomain>.streamlit.app`.
+
+### 10. Inspect Deployment Logs
+Click the **Manage app** tab in the bottom right corner of the hosted app to view build and runtime logs:
+- Verify `pip install -r requirements.txt` succeeds.
+- Confirm `app.py` starts without import errors.
+- Confirm that no stack traces or credentials appear in the logs.
+
+### 11. Diagnose and Troubleshoot Common Issues
+- **`ModuleNotFoundError: No module named 'financial_report_analyzer'`:** The application entry point dynamically prepends `src/` to `sys.path`. If this error occurs, verify that the repository structure has not been modified.
+- **`Authentication failed: Invalid or unauthorized Gemini API key`:** Ensure `GEMINI_API_KEY` in Streamlit Secrets has no extraneous quotes or whitespace.
+- **`ResourceExhausted / 429`:** Free-tier Gemini keys have request-per-minute (RPM) quotas. Bounded exponential backoff handles brief spikes; for high-traffic demos, configure spend limits in Google AI Studio.
+- **`File size exceeds limit`:** Documents over 25 MB or 250 pages are rejected by design to prevent cloud container memory exhaustion.
+
+### 12. Verify Live Hosted Operations
+Once launched:
+1. Confirm the **API Key: Configured** indicator is green in the sidebar.
+2. Upload a sample corporate report (e.g., a public 10-K).
+3. Click **Analyze Report** to parse pages, generate chunks, and build the ephemeral vector store.
+4. In **Ask the Report**, submit a question (e.g., *"What was total revenue in the latest fiscal year?"*) and verify that a grounded answer with verified page citations is returned.
+5. Click **Extract Financials (KPIs & Risks)** to verify structured balance sheet, cash flow, risk, and guidance extraction.
+6. In **Overview**, download JSON, CSV, and Markdown exports to confirm in-memory generation.
+7. Click **Clear Report** to ensure all active document state and vector collections are cleared from memory.
+
+### 13. Rotate or Update Credentials Safely
+To update an API key:
+1. Open [Google AI Studio](https://aistudio.google.com/) and create a new key.
+2. Open the Streamlit App Settings -> **Secrets**.
+3. Replace the `GEMINI_API_KEY` value and click **Save**.
+4. Streamlit Cloud automatically reboots the application with the new secret.
+
+### 14. Reboot or Unpublish
+To pause or delete the hosted application:
+- In the Streamlit Cloud dashboard, click the app's three dots (`⋮`) and select **Reboot app** (to refresh state) or **Delete app** (to immediately unpublish).
+
+---
+
 ## Configuration Reference
 
-All settings can be configured via environment variables or `.streamlit/secrets.toml`:
+All application settings are loaded hierarchically: environment variables take first priority, followed by Streamlit Secrets (`st.secrets`), with safe application defaults:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -121,81 +231,52 @@ All settings can be configured via environment variables or `.streamlit/secrets.
 | `CHUNK_OVERLAP_TOKENS` | `120` | Token overlap between consecutive chunks on a page. |
 | `RETRIEVAL_TOP_K` | `5` | Number of context chunks retrieved per query. |
 | `MIN_EVIDENCE_THRESHOLD` | `0.35` | Minimum cosine relevance score required before abstaining. |
+| `SESSION_QA_BUDGET` | `25` | Per-session question budget to guard against quota exhaustion. |
+| `SESSION_ANALYSIS_BUDGET` | `5` | Per-session full report financial extraction budget. |
 | `LOG_LEVEL` | `INFO` | Application logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
 ---
 
-## How the In-Memory Vector Store & Isolation Work
+## Public Demo Abuse, Safeguards & Cost Controls
 
-- **Ephemeral ChromaDB**: Uses `chromadb.EphemeralClient()` purely in memory. No SQLite files, parquet tables, or vector directories are persisted to disk.
-- **Session Isolation**: Each indexed report generates a unique, unpredictable collection name (e.g., `doc_<digest>_<uuid8>`). Collections are tracked in Streamlit `st.session_state`.
-- **Precomputed Vectors**: Chroma is supplied with explicit precomputed vectors from `EmbeddingService`, completely bypassing any default embedding functions.
-- **Reset Semantics**: Uploading a new document or clicking **Clear Report** immediately invokes `collection.delete()`, removing the ephemeral collection and freeing memory.
+Publicly accessible portfolio demos calling paid or quota-limited LLM APIs require bounded controls:
 
----
-
-## Multi-Format Exports & Security
-
-FinSight allows downloading active session analysis results in three formats directly from the browser without disk persistence:
-
-1. **Structured JSON (`export_analysis_json`)**:
-   - Versioned schema contract (`export_schema_version: "1.0.0"`).
-   - ISO 8601 UTC export timestamp (`generated_at_utc`).
-   - Full provenance: document metadata, processing metrics, coverage stats, structured metrics, risks, and outlook.
-   - Non-investment advice disclaimer embedded.
-2. **Spreadsheet CSVs (`export_metrics_csv`, `export_risks_csv`, `export_outlook_csv`, `export_analysis_csv`)**:
-   - RFC 4180 standard formatting with dedicated headers.
-   - **CSV Formula Injection Defense**: Text fields beginning with `=`, `+`, `-`, `@`, `\t`, or `\r` are prepended with `'` to prevent DDE code execution in Microsoft Excel and Google Sheets. Dedicated numeric columns are preserved for native spreadsheet calculations.
-3. **Executive Markdown Report (`export_analysis_markdown`)**:
-   - Polished report layout with executive summary, strategic takeaways, formatted KPI tables (with escaped table pipes `\|`), risk factors, and forward guidance.
-4. **Zero Server Disk Persistence**:
-   - Exports are generated strictly in-memory and delivered via Streamlit `st.download_button`. No file artifacts or customer documents are written to the server filesystem.
-   - Filenames are sanitized against path traversal (`../`) and illegal filesystem characters.
+1. **Pre-Processing Validation**: Files are strictly validated for extension (`.pdf`), PDF signature (`%PDF-`), non-zero byte size, 25 MB size cap, and 250 page count cap before invoking any API.
+2. **Per-Session Inquiry Budgets**: Bounded session counters track user Q&A inquiries (default: 25) and full financial analyses (default: 5). When reached, clear notices instruct the visitor to reset their session.
+   > **Note:** In-memory session limits manage portfolio demo usage within active browser sessions; they do not replace global provider-level budget caps.
+3. **Provider Spend Controls**: The application owner can set hard spending limits and alert thresholds directly in [Google Cloud Console Billing](https://console.cloud.google.com/billing) or Google AI Studio to prevent unexpected billing.
+4. **Rate Limit Handling**: Exponential backoff (up to 3 retries) gracefully handles transient 429 rate limit errors without crashing the interface.
+5. **Session Reset Semantics**: Clicking **Clear Report** immediately invokes `collection.delete()`, clearing all ephemeral vectors, text chunks, and cached analysis.
 
 ---
 
-## Running Tests
+## Memory Safety & Ephemeral Processing
 
-### Offline Test Suite
-The complete test suite runs offline using synthetic programmatic PDFs and mocked Google GenAI client calls (requires no network connection or API billing):
-
-```bash
-.venv\Scripts\python -m pytest tests -v
-```
-
-### Optional Live Integration Smoke Test
-An opt-in smoke test verifies real connectivity with the Google Gemini API when credentials are provided:
-
-```bash
-# Set environment variables:
-set RUN_LIVE_GEMINI_TESTS=1
-set GEMINI_API_KEY=your_actual_key
-
-# Run live smoke test:
-.venv\Scripts\python -m pytest tests/test_embedding_service.py -k test_live_gemini_embedding_smoke -v
-```
+- **Pure In-Memory Processing**: Uploaded PDF bytes are parsed via PyMuPDF in memory. Neither original PDF documents nor temporary text files are written to server disk storage during normal user operation.
+- **Session-Isolated Ephemeral ChromaDB**: Vector collections are instantiated using `chromadb.EphemeralClient()`. Each report session generates an isolated, unpredictable collection name (e.g. `doc_<digest>_<uuid8>`).
+- **Zero Cross-Session Leakage**: One visitor cannot access another visitor's vector store or document chunks.
+- **In-Memory Exports**: Downloadable JSON, CSV, and Markdown files are serialized on demand in memory and streamed via Streamlit `st.download_button`.
 
 ---
 
 ## Evaluation Benchmark & Quality Scorecard
 
-FinSight includes a reproducible, versioned evaluation benchmark (`evals/`) that measures retrieval, source-grounded QA, citation faithfulness, abstention, financial arithmetic, and export integrity:
+FinSight provides an offline, reproducible evaluation framework (`evals/`) that runs against a gold benchmark dataset of 3 synthetic corporate filings (`manifest.json` v1.0.0):
 
-### 1. Run Offline Evaluation
-Runs the complete 110-assertion gold dataset offline without requiring an API key or network connectivity:
-
+### 1. Run Offline Benchmark
+Runs the complete 110-assertion gold dataset offline in ~0.5s with zero external API calls or billing costs:
 ```bash
 .venv\Scripts\python -m evals.runner
 ```
 
-### 2. Save Benchmark Baseline
-```bash
-.venv\Scripts\python -m evals.runner --save-baseline evals/results/baseline_scorecard.json
-```
-
-### 3. Compare Against Baseline (Regression Detection)
+### 2. Compare Against Baseline (Regression Detection)
 ```bash
 .venv\Scripts\python -m evals.runner --compare evals/results/baseline_scorecard.json
+```
+
+### 3. Save Baseline Scorecard
+```bash
+.venv\Scripts\python -m evals.runner --save-baseline evals/results/baseline_scorecard.json
 ```
 
 ### 4. Optional Live Evaluation
@@ -205,28 +286,39 @@ set GEMINI_API_KEY=your_actual_key
 .venv\Scripts\python -m evals.runner --mode live
 ```
 
-Detailed methodology, metric definitions, and provisional quality gates are documented in [`evals/README.md`](evals/README.md).
+### Understanding Evaluation Types & Accuracy Disclaimers
+It is essential to distinguish between the four levels of testing in FinSight:
+- **Unit & Regression Tests (`pytest`):** 144 passing offline unit tests validating individual functions, schemas, error paths, and security defenses.
+- **Offline Synthetic Benchmark (`evals.runner`):** 110 deterministic assertions running against mock embeddings and synthetic PDFs. Verifies that pipeline logic, citations, abstentions, and arithmetic meet quality gates under controlled conditions.
+- **Optional Live-Model Evaluation:** Opt-in evaluation executing real Gemini API calls against synthetic filings.
+- **Hosted Cloud Smoke Testing:** Live manual testing in Streamlit Community Cloud against real corporate filings.
+
+> **Important Real-World AI Accuracy Notice:**  
+> Offline benchmark pass rates demonstrate architectural soundness and deterministic contract adherence; **they do not establish 100% real-world accuracy on complex, non-standard, or novel corporate filings**. Real-world financial figures must always be verified against the original filing.
 
 ---
 
-## Data Retention & Known Limitations
+## Running Automated Tests
 
-- **Temporary In-Memory Retention**: Extracted text, page records, and Chroma collections reside in Python memory for the duration of the browser session. They are purged upon session clear or browser close.
-- **Re-indexing on Upload**: Because indices are ephemeral, uploading a new file discards the prior collection and builds a fresh index for the active report.
-- **Token Estimation**: Chunker token counting uses a local deterministic heuristic (~4 characters per token). It does not perform a remote API call per candidate chunk.
-- **API Quotas & Rate Limits**: Gemini API calls include bounded exponential backoff (up to 3 retries) for HTTP 429 rate limits and 5xx transient server errors.
+```bash
+# Run all 144 offline unit and regression tests:
+.venv\Scripts\python -m pytest tests -v
 
----
-
-## Privacy & Security Notice
-
-- **Public Filings Only**: The application is intended for publicly available corporate reports (e.g. SEC EDGAR filings).
-- **External API Processing**: Document excerpts are sent to Google Gemini APIs for embedding and generation.
-- **In-Memory Ephemeral Storage**: Uploaded files and vector indices are created ephemerally for the duration of the active session and are not permanently stored on disk.
-- **No Hard-coded Secrets**: Credentials are read strictly from environment variables or deployment secret managers.
+# Run deployment and security hardening tests:
+.venv\Scripts\python -m pytest tests/test_deployment_hardening.py -v
+```
 
 ---
 
-## Disclaimer
+## Known Limitations
 
-**Not Investment Advice**: This software is an experimental document analysis and research tool. It does not provide investment advice, trading recommendations, or financial audit opinions. Extracted metrics and summaries may be incomplete or subject to parsing nuances. Always verify figures directly with official regulatory filings.
+- **OCR is Not Supported**: Scanned, image-only PDFs without extractable text layers trigger a warning. Optical Character Recognition (OCR) is intentionally out of scope for this version.
+- **Single-Document Focus**: FinSight is designed for deep single-document analysis per session. Cross-document comparison across hundreds of filings simultaneously is out of scope.
+- **Currency Conversion**: Year-over-year calculations require identical reporting currencies; foreign exchange conversions are intentionally withheld.
+
+---
+
+## License & Attribution
+
+FinSight is built for educational, portfolio, and research purposes.
+Developed using Streamlit, PyMuPDF, Google GenAI SDK (`google-genai`), ChromaDB, and Pydantic.

@@ -208,9 +208,18 @@ class RAGService:
                     continue
 
                 logger.error("Gemini API error during generation (status %s): %s", status_code, str(exc))
+                if status_code in (401, 403):
+                    msg = "Authentication failed: Invalid or unauthorized Gemini API key. Please verify GEMINI_API_KEY."
+                elif status_code == 429:
+                    msg = "Gemini API quota or rate limit exceeded. Please check your Google AI Studio quota or try again later."
+                elif status_code in (500, 503):
+                    msg = "Google Gemini API service outage (500/503). Please try again shortly."
+                else:
+                    msg = "Financial question answering failed due to a Gemini API service error. Please try again."
+
                 raise RAGGenerationError(
                     f"Gemini API generation failed (status {status_code}): {str(exc)}",
-                    user_friendly_message="Financial question answering failed due to a Gemini API service error. Please try again.",
+                    user_friendly_message=msg,
                 ) from exc
 
             except Exception as exc:

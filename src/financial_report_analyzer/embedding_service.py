@@ -113,9 +113,13 @@ class EmbeddingService:
                 # Permanent client errors (400, 401, 403, 404): fail immediately
                 if code in {400, 401, 403, 404}:
                     logger.error("Permanent API error %s while embedding %s: %s", code, label, str(err))
+                    if code in (401, 403):
+                        user_msg = "Authentication failed: Invalid or unauthorized Gemini API key. Please verify GEMINI_API_KEY."
+                    else:
+                        user_msg = "Configuration or request error with Google Gemini API. Please check your model settings."
                     raise EmbeddingError(
                         f"Gemini API error ({code}): {str(err)}",
-                        user_friendly_message="Authentication or configuration error with Google Gemini API. Please check your API key.",
+                        user_friendly_message=user_msg,
                     ) from err
 
                 # Retriable errors: 429 (Resource Exhausted) or 5xx Server Errors
@@ -141,9 +145,15 @@ class EmbeddingService:
                     continue
 
                 logger.error("Exhausted retries or non-retriable API error for %s: %s", label, str(err))
+                if code == 429:
+                    user_msg = "Gemini embedding API quota or rate limit exceeded. Please check your Google AI Studio quota or try again later."
+                elif isinstance(code, int) and 500 <= code < 600:
+                    user_msg = "Google Gemini API service outage (500/503). Please try again shortly."
+                else:
+                    user_msg = "Temporary embedding service failure. Please verify API quota or try again later."
                 raise EmbeddingError(
                     f"Gemini embedding API failed after {attempt} retries: {str(err)}",
-                    user_friendly_message="Temporary embedding service failure. Please verify API quota or try again later.",
+                    user_friendly_message=user_msg,
                 ) from err
 
             except EmbeddingError:
