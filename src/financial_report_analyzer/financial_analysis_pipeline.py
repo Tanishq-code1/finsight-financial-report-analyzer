@@ -1,11 +1,15 @@
 """Orchestration pipeline for full-report financial extraction, citation verification, and deterministic analysis."""
 
 import time
+import hashlib
 import logging
+import concurrent.futures
 from datetime import datetime, timezone
 from typing import List, Optional, Callable, Sequence, Dict, Tuple
 
 from financial_report_analyzer.config import AppConfig, load_config
+from financial_report_analyzer.cache import GLOBAL_CACHE
+from financial_report_analyzer.section_router import route_pages_for_extraction
 from financial_report_analyzer.errors import FinancialAnalyzerError, ConfigurationError
 from financial_report_analyzer.schemas import (
     PageRecord,
@@ -214,20 +218,95 @@ def run_financial_analysis_pipeline(
             verification_rate=0.0,
         )
 
-    # 2. Partition into bounded batches
+    # 2. Partition or route into bounded batches
     t_partition_start = time.monotonic()
-    batches = partition_pages_into_batches(readable_pages, max_pages=batch_page_size, max_chars=max_batch_chars)
+    if getattr(app_config, "enable_section_routing", True) and len(readable_pages) > 10:
+        batches = route_pages_for_extraction(readable_pages, config=app_config)
+    else:
+        batches = partition_pages_into_batches(readable_pages, max_pages=batch_page_size, max_chars=max_batch_chars)
     total_batches = len(batches)
     logger.info(
-        "Partitioned %d readable pages into %d extraction batches in %.3fs",
+        "Partitioned/routed %d readable pages into %d extraction batches in %.3fs",
         readable_pages_count,
         total_batches,
         time.monotonic() - t_partition_start,
     )
 
-    # 3. Initialize or use supplied extractor
+    # 3. Initialize extractor and execution settings
     ext = extractor or FinancialExtractor(config=app_config)
-    pipeline_deadline = t_pipeline_start + getattr(app_config, "generation_timeout_sec", 120.0)
+    batch_timeout_sec = getattr(app_config, "extraction_batch_timeout_sec", 60.0)
+    concurrency = max(1, getattr(app_config, "extraction_concurrency", 2))
+    doc_hash = metadata.document_id
+
+    def make_batch_key(b: List[PageRecord]) -> str:
+        content_hash = hashlib.sha256(b"".join(p.text.encode("utf-8") for p in b)).hexdigest()[:12]
+        return f"b_{b[0].page_number}_{b[-1].page_number}_{len(b)}_{content_hash}"
+
+    def process_single_batch(
+        batch_tuple: Tuple[int, List[PageRecord]],
+    ) -> Tuple[int, List[PageRecord], Optional[BatchExtractionResult], Optional[str]]:
+        idx, batch = batch_tuple
+        page_range_label = f"pages {batch[0].page_number}–{batch[-1].page_number}"
+        batch_id = make_batch_key(batch)
+        model_name = getattr(ext, "generation_model", "gemini-3.8-flash")
+
+        # Fast in-memory cache check
+        if getattr(app_config, "enable_in_memory_cache", True):
+            cached = GLOBAL_CACHE.get_batch_extraction(doc_hash, batch_id, model_name)
+            if cached is not None:
+                logger.info("Reusing cached extraction for batch %d (%s)", idx, page_range_label)
+                return idx, batch, cached, None
+
+        # Execute extraction with dedicated per-batch deadline
+        batch_deadline = time.monotonic() + batch_timeout_sec
+        try:
+            res = ext.extract_batch(batch, document_id=metadata.document_id, deadline=batch_deadline)
+            if getattr(app_config, "enable_in_memory_cache", True):
+                GLOBAL_CACHE.put_batch_extraction(doc_hash, batch_id, model_name, res)
+            return idx, batch, res, None
+        except Exception as exc:
+            err_msg = f"Extraction batch {idx} ({page_range_label}) failed: {str(exc)}"
+            return idx, batch, None, err_msg
+
+    # Execute batches (sequential if concurrency <= 1 or only 1 batch, else bounded ThreadPoolExecutor)
+    batch_results: List[Tuple[int, List[PageRecord], Optional[BatchExtractionResult], Optional[str]]] = []
+
+    if concurrency <= 1 or total_batches <= 1:
+        for idx, batch in enumerate(batches, start=1):
+            page_range_label = f"pages {batch[0].page_number}–{batch[-1].page_number}"
+            progress_fraction = 0.10 + (0.75 * ((idx - 1) / total_batches))
+            if progress_callback:
+                progress_callback(
+                    progress_fraction,
+                    f"Analyzing batch {idx}/{total_batches} ({page_range_label})...",
+                )
+            batch_results.append(process_single_batch((idx, batch)))
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_to_batch = {
+                executor.submit(process_single_batch, (idx, batch)): (idx, batch)
+                for idx, batch in enumerate(batches, start=1)
+            }
+            completed_count = 0
+            for future in concurrent.futures.as_completed(future_to_batch):
+                completed_count += 1
+                progress_fraction = 0.10 + (0.75 * (completed_count / total_batches))
+                if progress_callback:
+                    idx_f, batch_f = future_to_batch[future]
+                    progress_callback(
+                        progress_fraction,
+                        f"Completed extraction batch {completed_count}/{total_batches} (pages {batch_f[0].page_number}–{batch_f[-1].page_number})...",
+                    )
+                try:
+                    res_tuple = future.result()
+                    batch_results.append(res_tuple)
+                except Exception as exc:
+                    idx_f, batch_f = future_to_batch[future]
+                    err = f"Extraction batch {idx_f} (pages {batch_f[0].page_number}–{batch_f[-1].page_number}) crashed: {str(exc)}"
+                    batch_results.append((idx_f, batch_f, None, err))
+
+        # Restore deterministic original batch ordering
+        batch_results.sort(key=lambda x: x[0])
 
     raw_metrics: List[FinancialMetric] = []
     raw_risks: List[RiskItem] = []
@@ -242,20 +321,10 @@ def run_financial_analysis_pipeline(
     batches_succeeded = 0
     batches_failed = 0
 
-    for idx, batch in enumerate(batches, start=1):
+    for idx, batch, batch_result, err_msg in batch_results:
         page_range_label = f"pages {batch[0].page_number}–{batch[-1].page_number}"
-        progress_fraction = 0.10 + (0.75 * ((idx - 1) / total_batches))
-
-        if progress_callback:
-            progress_callback(
-                progress_fraction,
-                f"Analyzing batch {idx}/{total_batches} ({page_range_label})...",
-            )
-
-        try:
-            batch_result = ext.extract_batch(batch, document_id=metadata.document_id, deadline=pipeline_deadline)
+        if batch_result is not None:
             batches_succeeded += 1
-
             if batch_result.model_used:
                 models_used.add(batch_result.model_used)
             if getattr(batch_result, "fallback_used", False):
@@ -272,10 +341,8 @@ def run_financial_analysis_pipeline(
             raw_risks.extend(batch_result.risks)
             raw_outlook.extend(batch_result.outlook)
             summary_snippets.extend(batch_result.executive_summary_excerpts)
-
-        except Exception as exc:
+        else:
             batches_failed += 1
-            err_msg = f"Extraction batch {idx} ({page_range_label}) failed: {str(exc)}"
             logger.error(err_msg)
             limitations.append(err_msg)
 

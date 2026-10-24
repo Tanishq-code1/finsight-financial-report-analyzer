@@ -539,7 +539,7 @@ def test_appconfig_safe_zero_argument_instantiation():
     assert cfg.embedding_rpm_limit == 60
     assert cfg.embedding_safety_margin == 0.80
     assert cfg.embedding_max_retries == 5
-    assert cfg.embedding_batch_size == 1
+    assert cfg.embedding_batch_size == 16
     assert cfg.embedding_deadline_sec == 120.0
     assert "embedding_tpm_limit" in cfg.safe_diagnostics
 

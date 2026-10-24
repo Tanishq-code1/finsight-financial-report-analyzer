@@ -38,7 +38,7 @@ def test_default_config(monkeypatch: pytest.MonkeyPatch):
     assert cfg.embedding_max_retries == 5
     assert cfg.embedding_initial_backoff_sec == 2.0
     assert cfg.embedding_max_backoff_sec == 60.0
-    assert cfg.embedding_batch_size == 1
+    assert cfg.embedding_batch_size == 16
     assert cfg.embedding_deadline_sec == 120.0
     assert "embedding_tpm_limit" in cfg.safe_diagnostics
     assert "embedding_rpm_limit" in cfg.safe_diagnostics
@@ -103,7 +103,7 @@ def test_appconfig_getattr_fallback_for_missing_attributes():
     assert cfg.embedding_max_retries == 5
     assert cfg.embedding_initial_backoff_sec == 2.0
     assert cfg.embedding_max_backoff_sec == 60.0
-    assert cfg.embedding_batch_size == 1
+    assert cfg.embedding_batch_size == 16
     assert cfg.embedding_deadline_sec == 120.0
 
     # Test accessing a non-existent configuration attribute

@@ -46,6 +46,7 @@ from financial_report_analyzer.schemas import (
     IndexingResult,
     DocumentMetadata,
 )
+from financial_report_analyzer.cache import GLOBAL_CACHE
 from financial_report_analyzer.pdf_loader import load_pdf
 from financial_report_analyzer.chunker import chunk_pages, ChunkerConfig
 from financial_report_analyzer.embedding_service import EmbeddingService
@@ -488,14 +489,38 @@ def main() -> None:
             st.session_state.report_analysis is not None
             and getattr(st.session_state, "analysis_document_id", None) == st.session_state.document_id
         )
-        fin_btn_label = "📊 Extract Financials (KPIs & Risks)" if not has_existing_analysis else "🔄 Re-extract Financials"
-        fin_btn_clicked = st.button(
+        has_partial_analysis = bool(
+            has_existing_analysis
+            and st.session_state.report_analysis is not None
+            and (
+                st.session_state.report_analysis.analysis_status == "partial"
+                or getattr(st.session_state.report_analysis, "batches_failed", 0) > 0
+            )
+        )
+
+        fin_btn_clicked = False
+        if has_partial_analysis:
+            failed_count = getattr(st.session_state.report_analysis, "batches_failed", 0)
+            retry_clicked = st.button(
+                f"🔄 Retry Incomplete Batches ({failed_count} remaining)",
+                type="primary",
+                width="stretch",
+                disabled=not has_extracted_doc or st.session_state.is_processing,
+                help="Only execute the failed extraction batches while reusing previously succeeded batches from memory.",
+            )
+            if retry_clicked:
+                fin_btn_clicked = True
+
+        fin_btn_label = "📊 Extract Financials (KPIs & Risks)" if not has_existing_analysis else "🔄 Re-extract All Financials"
+        full_fin_clicked = st.button(
             fin_btn_label,
             type="secondary",
             width="stretch",
             disabled=not has_extracted_doc or st.session_state.is_processing,
             help="Extract structured KPIs, balance sheet items, disclosed risks, management outlook, and calculate YoY changes.",
         )
+        if full_fin_clicked:
+            fin_btn_clicked = True
 
         if fin_btn_clicked and has_extracted_doc:
             if not config.has_api_key:
@@ -1666,6 +1691,56 @@ def main() -> None:
                         Q&A Budget: <strong>{st.session_state.qa_count} / {qa_b}</strong><br/>
                         Analysis Budget: <strong>{st.session_state.analysis_count} / {an_b}</strong><br/>
                         Credentials: <strong>{'Configured' if has_key else 'Not Configured'}</strong>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("#### Performance Acceleration & In-Memory Caching")
+        perf_col1, perf_col2, perf_col3 = st.columns(3)
+        cache_stats = GLOBAL_CACHE.get_stats()
+        bulk_batch = getattr(config, "embedding_batch_size", 16)
+        concurrency = getattr(config, "extraction_concurrency", 2)
+        sec_routing = "Enabled (SEC Item 8, 7, 1A)" if getattr(config, "enable_section_routing", True) else "Disabled"
+
+        with perf_col1:
+            st.markdown(
+                f"""
+                <div class="kpi-metric-box">
+                    <div class="kpi-title">In-Memory Cache Entries</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
+                        PDF Ingestions: <strong>{cache_stats['pdf_ingestions']}</strong><br/>
+                        Chunk Sets: <strong>{cache_stats['chunk_sets']}</strong><br/>
+                        Embedding Vectors: <strong>{cache_stats['embedding_vectors']}</strong>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with perf_col2:
+            st.markdown(
+                f"""
+                <div class="kpi-metric-box">
+                    <div class="kpi-title">Extraction Cache & Concurrency</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
+                        Batch Extractions: <strong>{cache_stats['batch_extractions']}</strong><br/>
+                        Extraction Workers: <strong>{concurrency} concurrent</strong><br/>
+                        Batch Timeout: <strong>{int(getattr(config, 'extraction_batch_timeout_sec', 60.0))}s / batch</strong>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with perf_col3:
+            st.markdown(
+                f"""
+                <div class="kpi-metric-box">
+                    <div class="kpi-title">Batching & Routing Pipeline</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
+                        Bulk Embedding: <strong>{bulk_batch} chunks/req</strong><br/>
+                        Section Routing: <strong>{sec_routing}</strong><br/>
+                        Index Coverage: <strong>100% of Document Pages</strong>
                     </div>
                 </div>
                 """,

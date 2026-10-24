@@ -51,9 +51,15 @@ _DEFAULT_CONFIG_VALUES: Dict[str, Any] = {
     "embedding_max_retries": 5,
     "embedding_initial_backoff_sec": 2.0,
     "embedding_max_backoff_sec": 60.0,
-    "embedding_batch_size": 1,
+    "embedding_batch_size": 16,
     "embedding_deadline_sec": 120.0,
     "generation_timeout_sec": 120.0,
+    "extraction_concurrency": 2,
+    "extraction_batch_page_size": 16,
+    "extraction_max_batch_chars": 45000,
+    "extraction_batch_timeout_sec": 60.0,
+    "enable_section_routing": True,
+    "enable_in_memory_cache": True,
 }
 
 
@@ -81,9 +87,15 @@ class AppConfig:
     embedding_max_retries: int = 5
     embedding_initial_backoff_sec: float = 2.0
     embedding_max_backoff_sec: float = 60.0
-    embedding_batch_size: int = 1
+    embedding_batch_size: int = 16
     embedding_deadline_sec: float = 120.0
     generation_timeout_sec: float = 120.0
+    extraction_concurrency: int = 2
+    extraction_batch_page_size: int = 16
+    extraction_max_batch_chars: int = 45000
+    extraction_batch_timeout_sec: float = 60.0
+    enable_section_routing: bool = True
+    enable_in_memory_cache: bool = True
 
     def __getattr__(self, name: str) -> Any:
         """Provide safe fallback default values if an attribute is missing.
@@ -129,9 +141,15 @@ class AppConfig:
             "embedding_max_retries": getattr(self, "embedding_max_retries", 5),
             "embedding_initial_backoff_sec": getattr(self, "embedding_initial_backoff_sec", 2.0),
             "embedding_max_backoff_sec": getattr(self, "embedding_max_backoff_sec", 60.0),
-            "embedding_batch_size": getattr(self, "embedding_batch_size", 1),
+            "embedding_batch_size": getattr(self, "embedding_batch_size", 16),
             "embedding_deadline_sec": getattr(self, "embedding_deadline_sec", 120.0),
             "generation_timeout_sec": getattr(self, "generation_timeout_sec", 120.0),
+            "extraction_concurrency": getattr(self, "extraction_concurrency", 2),
+            "extraction_batch_page_size": getattr(self, "extraction_batch_page_size", 16),
+            "extraction_max_batch_chars": getattr(self, "extraction_max_batch_chars", 45000),
+            "extraction_batch_timeout_sec": getattr(self, "extraction_batch_timeout_sec", 60.0),
+            "enable_section_routing": getattr(self, "enable_section_routing", True),
+            "enable_in_memory_cache": getattr(self, "enable_in_memory_cache", True),
             "api_key_configured": getattr(self, "has_api_key", False),
         }
 
@@ -228,9 +246,9 @@ def load_config() -> AppConfig:
         embedding_max_backoff_sec = 60.0
 
     try:
-        embedding_batch_size = max(1, int(_get_setting("EMBEDDING_BATCH_SIZE", "1")))
+        embedding_batch_size = max(1, min(50, int(_get_setting("EMBEDDING_BATCH_SIZE", "16"))))
     except ValueError:
-        embedding_batch_size = 1
+        embedding_batch_size = 16
 
     try:
         embedding_deadline_sec = max(10.0, float(_get_setting("EMBEDDING_DEADLINE_SEC", "120.0")))
@@ -241,6 +259,29 @@ def load_config() -> AppConfig:
         generation_timeout_sec = max(5.0, float(_get_setting("GENERATION_TIMEOUT_SEC", "120.0")))
     except ValueError:
         generation_timeout_sec = 120.0
+
+    try:
+        extraction_concurrency = max(1, min(4, int(_get_setting("EXTRACTION_CONCURRENCY", "2"))))
+    except ValueError:
+        extraction_concurrency = 2
+
+    try:
+        extraction_batch_page_size = max(1, int(_get_setting("EXTRACTION_BATCH_PAGE_SIZE", "16")))
+    except ValueError:
+        extraction_batch_page_size = 16
+
+    try:
+        extraction_max_batch_chars = max(5000, int(_get_setting("EXTRACTION_MAX_BATCH_CHARS", "45000")))
+    except ValueError:
+        extraction_max_batch_chars = 45000
+
+    try:
+        extraction_batch_timeout_sec = max(10.0, float(_get_setting("EXTRACTION_BATCH_TIMEOUT_SEC", "60.0")))
+    except ValueError:
+        extraction_batch_timeout_sec = 60.0
+
+    enable_section_routing = _get_setting("ENABLE_SECTION_ROUTING", "true").lower() in ("true", "1", "yes")
+    enable_in_memory_cache = _get_setting("ENABLE_IN_MEMORY_CACHE", "true").lower() in ("true", "1", "yes")
 
     return AppConfig(
         gemini_api_key=api_key,
@@ -266,6 +307,12 @@ def load_config() -> AppConfig:
         embedding_batch_size=embedding_batch_size,
         embedding_deadline_sec=embedding_deadline_sec,
         generation_timeout_sec=generation_timeout_sec,
+        extraction_concurrency=extraction_concurrency,
+        extraction_batch_page_size=extraction_batch_page_size,
+        extraction_max_batch_chars=extraction_max_batch_chars,
+        extraction_batch_timeout_sec=extraction_batch_timeout_sec,
+        enable_section_routing=enable_section_routing,
+        enable_in_memory_cache=enable_in_memory_cache,
     )
 
 

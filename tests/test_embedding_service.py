@@ -24,7 +24,7 @@ def make_mock_response(dimension: int = 768) -> MagicMock:
     return resp
 
 
-def make_test_config(has_key: bool = True) -> AppConfig:
+def make_test_config(has_key: bool = True, embedding_batch_size: int = 1) -> AppConfig:
     """Helper creating test AppConfig."""
     return AppConfig(
         gemini_api_key="test-secret-key" if has_key else None,
@@ -38,6 +38,7 @@ def make_test_config(has_key: bool = True) -> AppConfig:
         retrieval_top_k=5,
         min_evidence_threshold=0.35,
         log_level="INFO",
+        embedding_batch_size=embedding_batch_size,
     )
 
 

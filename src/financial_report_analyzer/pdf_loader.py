@@ -10,6 +10,7 @@ import pymupdf
 from financial_report_analyzer.config import AppConfig, load_config
 from financial_report_analyzer.errors import DocumentValidationError, PDFParsingError
 from financial_report_analyzer.schemas import DocumentMetadata, IngestionWarning, PageRecord
+from financial_report_analyzer.cache import GLOBAL_CACHE
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,31 @@ def load_pdf(
     )
 
     doc_id = generate_document_id(pdf_bytes)
+    doc_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+    # Fast in-memory cache check
+    if getattr(app_cfg, "enable_in_memory_cache", True):
+        cached = GLOBAL_CACHE.get_ingestion(doc_hash)
+        if cached is not None:
+            cached_res, cached_pages = cached
+            if require_extractable_text and cached_res.total_characters == 0:
+                raise DocumentValidationError(
+                    "PDF contains no extractable text across all pages.",
+                    user_friendly_message=(
+                        "No readable text could be extracted from this document. It appears to be an image-only or "
+                        "scanned PDF, which requires OCR (OCR is not supported in this version)."
+                    ),
+                )
+            logger.info("Reusing cached PDF ingestion result for '%s' (ID: %s)", filename, doc_id)
+            meta = cached_res.metadata.model_copy(update={"filename": filename})
+            return PDFIngestionResult(
+                metadata=meta,
+                pages=cached_pages,
+                total_characters=cached_res.total_characters,
+                pages_with_text=cached_res.pages_with_text,
+                is_sparse=cached_res.is_sparse,
+            )
+
     logger.info("Ingesting document '%s' (ID: %s, Size: %d bytes)", filename, doc_id, len(pdf_bytes))
 
     # Open PDF stream purely in memory
@@ -338,13 +364,18 @@ def load_pdf(
             len(warnings),
         )
 
-        return PDFIngestionResult(
+        result = PDFIngestionResult(
             metadata=metadata,
             pages=pages,
             total_characters=total_extracted_characters,
             pages_with_text=pages_with_text,
             is_sparse=is_sparse,
         )
+
+        if getattr(app_cfg, "enable_in_memory_cache", True):
+            GLOBAL_CACHE.put_ingestion(doc_hash, result, pages)
+
+        return result
 
     finally:
         doc.close()

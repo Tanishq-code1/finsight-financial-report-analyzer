@@ -15,6 +15,7 @@ from google.genai import errors as genai_errors
 from financial_report_analyzer.config import AppConfig, load_config
 from financial_report_analyzer.errors import ConfigurationError, EmbeddingError
 from financial_report_analyzer.schemas import ChunkRecord
+from financial_report_analyzer.cache import GLOBAL_CACHE
 
 logger = logging.getLogger(__name__)
 
@@ -734,10 +735,16 @@ class EmbeddingService:
                 raise EmbeddingError(f"Unexpected embedding error for {label}: {str(exc)}") from exc
 
     def embed_chunk(self, text: str, document_title: str) -> List[float]:
-        """Embed an individual document chunk using asymmetric document format."""
+        """Embed an individual document chunk using asymmetric document format with caching."""
+        cache_key = GLOBAL_CACHE.make_embedding_key(text, document_title, self.model_name, self.dimension)
+        cached = GLOBAL_CACHE.get_embedding(cache_key)
+        if cached is not None and len(cached) == self.dimension:
+            return cached
+
         formatted = format_document_text(title=document_title, text=text)
         tokens_est = estimate_conservative_tokens(formatted)
         vectors = self._call_embed_with_retry(formatted, label=f"chunk ({document_title})", tokens_est=tokens_est)
+        GLOBAL_CACHE.put_embedding(cache_key, vectors[0])
         return vectors[0]
 
     def embed_query(self, query: str) -> List[float]:
@@ -752,38 +759,36 @@ class EmbeddingService:
         chunks: List[ChunkRecord],
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[List[float]]:
-        """Embed document chunks with token pacing, partial progress preservation, and batching.
-
-        If any chunks already have valid in-memory embeddings (from a previous partial run),
-        they are preserved without re-calling the API, enabling seamless resumption.
-        """
+        """Embed document chunks with token pacing, partial progress preservation, and bulk batching."""
         if not chunks:
             return []
 
         total = len(chunks)
-        already_embedded = sum(1 for c in chunks if c.embedding is not None and len(c.embedding) == self.dimension)
 
-        if already_embedded > 0:
-            logger.info("Resuming embedding: %d of %d chunks already embedded in memory", already_embedded, total)
+        # 1. First pass: check existing in-memory vectors and global cache
+        cache_keys = [
+            GLOBAL_CACHE.make_embedding_key(c.text, c.source_filename, self.model_name, self.dimension)
+            for c in chunks
+        ]
+        hits, _ = GLOBAL_CACHE.get_embeddings_bulk(cache_keys)
 
-        embeddings: List[List[float]] = []
+        for i, c in enumerate(chunks):
+            if c.embedding is not None and len(c.embedding) == self.dimension:
+                continue
+            if i in hits:
+                c.embedding = hits[i]
 
-        logger.info(
-            "Generating embeddings for %d chunks using '%s' (dim=%d, batch_size=%d, effective_tpm=%d)",
-            total,
-            self.model_name,
-            self.dimension,
-            self.batch_size,
-            self.pacer.effective_tpm,
-        )
+        already_ready = sum(1 for c in chunks if c.embedding is not None and len(c.embedding) == self.dimension)
+        if already_ready > 0:
+            logger.info("Embedding cache/memory hit: %d of %d chunks ready", already_ready, total)
 
         batch_size = max(1, self.batch_size)
-        idx = 0
+        MAX_BATCH_TOKENS = 12000  # Conservative safe ceiling well below 24,000 effective TPM
 
+        idx = 0
         while idx < total:
-            # Check if current chunk already has a vector
+            # Skip already embedded chunks
             if chunks[idx].embedding is not None and len(chunks[idx].embedding) == self.dimension:
-                embeddings.append(chunks[idx].embedding)
                 idx += 1
                 if progress_callback:
                     try:
@@ -792,60 +797,68 @@ class EmbeddingService:
                         pass
                 continue
 
-            # If batch_size == 1 (default), embed single chunk
-            if batch_size == 1:
-                chunk = chunks[idx]
-                tokens_est = getattr(chunk, "token_count_estimate", None) or estimate_token_count(chunk.text)
-                tokens_est += 15
+            # Group up to batch_size consecutive un-embedded chunks without exceeding token ceiling
+            batch_chunks: List[ChunkRecord] = []
+            batch_keys: List[str] = []
+            batch_formatted: List[str] = []
+            batch_tokens = 0
 
-                try:
-                    vector = self.embed_chunk(text=chunk.text, document_title=chunk.source_filename)
-                    chunk.embedding = vector
-                    embeddings.append(vector)
-                except EmbeddingError as err:
-                    # Partial progress is preserved on chunk.embedding in memory
-                    logger.error("Embedding interrupted at chunk %d/%d: %s", idx + 1, total, str(err))
-                    err.user_friendly_message = (
-                        f"{err.user_friendly_message} (Embedded {idx}/{total} chunks before interruption; "
-                        "completed chunks are preserved in memory)."
-                    )
-                    raise
-
+            while idx < total and len(batch_chunks) < batch_size:
+                c = chunks[idx]
+                if c.embedding is not None and len(c.embedding) == self.dimension:
+                    break
+                fmt = format_document_text(c.source_filename, c.text)
+                c_tok = estimate_conservative_tokens(fmt)
+                if batch_chunks and (batch_tokens + c_tok > MAX_BATCH_TOKENS):
+                    break
+                batch_chunks.append(c)
+                batch_keys.append(cache_keys[idx])
+                batch_formatted.append(fmt)
+                batch_tokens += c_tok
                 idx += 1
-                if progress_callback:
-                    try:
-                        progress_callback(idx, total)
-                    except Exception:
-                        pass
-            else:
-                # Group up to batch_size consecutive un-embedded chunks
-                batch: List[ChunkRecord] = []
-                while idx < total and len(batch) < batch_size:
-                    if chunks[idx].embedding is not None and len(chunks[idx].embedding) == self.dimension:
-                        break
-                    batch.append(chunks[idx])
-                    idx += 1
 
-                formatted_list = [format_document_text(c.source_filename, c.text) for c in batch]
-                batch_tokens = sum(estimate_conservative_tokens(f) for f in formatted_list)
+            if not batch_chunks:
+                continue
 
+            vectors: Optional[List[List[float]]] = None
+            if len(batch_chunks) > 1:
                 try:
-                    vectors = self._call_embed_with_retry(
-                        formatted_list,
-                        label=f"batch ({len(batch)} chunks)",
+                    res_vectors = self._call_embed_with_retry(
+                        batch_formatted,
+                        label=f"bulk batch ({len(batch_chunks)} chunks, ~{batch_tokens} tokens)",
                         tokens_est=batch_tokens,
                     )
-                    for b_idx, c in enumerate(batch):
-                        c.embedding = vectors[b_idx]
-                        embeddings.append(vectors[b_idx])
-                except EmbeddingError as err:
-                    logger.error("Batch embedding interrupted: %s", str(err))
-                    raise
+                    if len(res_vectors) == len(batch_chunks):
+                        vectors = res_vectors
+                    else:
+                        logger.warning(
+                            "Bulk embedding returned %d vectors for %d chunks; falling back to 1-by-1 embedding.",
+                            len(res_vectors),
+                            len(batch_chunks),
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Bulk embedding failed for batch starting at chunk %d (%s); falling back to 1-by-1 embedding.",
+                        idx - len(batch_chunks),
+                        str(exc),
+                    )
 
-                if progress_callback:
-                    try:
-                        progress_callback(idx, total)
-                    except Exception:
-                        pass
+            if vectors is not None:
+                pairs_to_cache: List[Tuple[str, List[float]]] = []
+                for b_i, b_chunk in enumerate(batch_chunks):
+                    b_chunk.embedding = vectors[b_i]
+                    pairs_to_cache.append((batch_keys[b_i], vectors[b_i]))
+                GLOBAL_CACHE.put_embeddings_bulk(pairs_to_cache)
+            else:
+                # 1-by-1 embedding fallback (or single item batch)
+                for b_i, b_chunk in enumerate(batch_chunks):
+                    vec = self.embed_chunk(b_chunk.text, b_chunk.source_filename)
+                    b_chunk.embedding = vec
 
-        return embeddings
+            if progress_callback:
+                try:
+                    progress_callback(idx, total)
+                except Exception:
+                    pass
+
+        return [c.embedding for c in chunks if c.embedding is not None]

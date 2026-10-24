@@ -1,11 +1,13 @@
 """Sentence-aware, page-scoped chunking for financial reports."""
 
 import re
+import hashlib
 import logging
 from typing import List, Optional
 from dataclasses import dataclass
 
 from financial_report_analyzer.schemas import PageRecord, ChunkRecord
+from financial_report_analyzer.cache import GLOBAL_CACHE
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +260,21 @@ def chunk_pages(
     Returns:
         List of ChunkRecord objects with preserved page numbers and deterministic chunk IDs.
     """
+    if not pages:
+        return []
+
     chunker_cfg = config or ChunkerConfig()
+    doc_id = pages[0].document_id
+    pages_hash = hashlib.sha256(
+        b"".join(f"{p.page_number}:{p.text}".encode("utf-8") for p in pages)
+    ).hexdigest()
+    cfg_key = f"{chunker_cfg.target_tokens}_{chunker_cfg.overlap_tokens}_{pages_hash}"
+
+    cached = GLOBAL_CACHE.get_chunks(doc_id, cfg_key)
+    if cached is not None:
+        logger.debug("Reusing %d cached chunks for doc '%s'", len(cached), doc_id)
+        return cached
+
     all_chunks: List[ChunkRecord] = []
     global_chunk_idx = 0
 
@@ -271,6 +287,7 @@ def chunk_pages(
         all_chunks.extend(page_chunks)
         global_chunk_idx += len(page_chunks)
 
+    GLOBAL_CACHE.put_chunks(doc_id, cfg_key, all_chunks)
     logger.info(
         "Chunked %d pages into %d chunks (target=%d, overlap=%d)",
         len(pages),
