@@ -1,5 +1,6 @@
 """Orchestration pipeline for chunking, embedding, and vector indexing."""
 
+import time
 import logging
 from typing import List, Optional, Callable
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ def run_indexing_pipeline(
     chroma_client: Optional[ClientAPI] = None,
     progress_callback: Optional[Callable[[str, float], None]] = None,
     chunks: Optional[List[ChunkRecord]] = None,
+    extraction_time_sec: Optional[float] = None,
     **kwargs,
 ) -> IndexingPipelineResult:
     """Execute end-to-end Phase 3 indexing pipeline for extracted report pages.
@@ -49,6 +51,7 @@ def run_indexing_pipeline(
         chroma_client: Optional Chroma ClientAPI (instantiates EphemeralClient if None).
         progress_callback: Optional callback receiving (step_description, fraction_complete).
         chunks: Optional pre-existing ChunkRecord list (preserves existing embeddings across retries).
+        extraction_time_sec: Optional duration of PDF extraction stage in seconds.
 
     Returns:
         IndexingPipelineResult containing summary, active vector store, and chunk records.
@@ -57,6 +60,7 @@ def run_indexing_pipeline(
         EmbeddingError: If vector generation fails.
         VectorStoreError: If indexing into ChromaDB fails.
     """
+    t_pipeline_start = time.monotonic()
     app_cfg = config or load_config()
 
     if not pages:
@@ -70,6 +74,11 @@ def run_indexing_pipeline(
             embedding_model=app_cfg.gemini_embedding_model,
             embedding_dimension=app_cfg.embedding_dimension,
             collection_name="col_empty",
+            extraction_time_sec=extraction_time_sec,
+            chunking_time_sec=0.0,
+            embedding_time_sec=0.0,
+            vector_store_time_sec=0.0,
+            total_indexing_time_sec=0.0,
         )
         empty_store = VectorStore(
             document_id=doc_id,
@@ -82,6 +91,7 @@ def run_indexing_pipeline(
     doc_id = pages[0].document_id
 
     # Step 1: Chunking (or reuse existing chunks from memory)
+    t_chunk_start = time.monotonic()
     if chunks is None:
         if progress_callback:
             progress_callback("Chunking report pages...", 0.1)
@@ -91,8 +101,10 @@ def run_indexing_pipeline(
             overlap_tokens=app_cfg.chunk_overlap_tokens,
         )
         chunks = chunk_pages(pages, config=chunker_cfg)
-        logger.info("Generated %d chunks from %d pages for doc '%s'", len(chunks), len(pages), doc_id)
+        chunking_time_sec = time.monotonic() - t_chunk_start
+        logger.info("Generated %d chunks from %d pages for doc '%s' in %.2fs", len(chunks), len(pages), doc_id, chunking_time_sec)
     else:
+        chunking_time_sec = 0.0
         logger.info("Reusing %d existing chunks in memory for doc '%s'", len(chunks), doc_id)
 
     if not chunks:
@@ -105,6 +117,11 @@ def run_indexing_pipeline(
             embedding_model=app_cfg.gemini_embedding_model,
             embedding_dimension=app_cfg.embedding_dimension,
             collection_name=f"col_{doc_id}",
+            extraction_time_sec=extraction_time_sec,
+            chunking_time_sec=round(chunking_time_sec, 3),
+            embedding_time_sec=0.0,
+            vector_store_time_sec=0.0,
+            total_indexing_time_sec=round(time.monotonic() - t_pipeline_start, 3),
         )
         empty_store = VectorStore(
             document_id=doc_id,
@@ -121,13 +138,19 @@ def run_indexing_pipeline(
     if progress_callback:
         progress_callback("Generating vector embeddings...", 0.3)
 
-    def embed_progress(current: int, total: int) -> None:
+    def embed_progress(current: int, total: int, batch_idx: Optional[int] = None, total_batches: Optional[int] = None) -> None:
         if progress_callback and total > 0:
             fraction = 0.3 + 0.4 * (current / total)
-            progress_callback(f"Embedding chunk {current}/{total}...", fraction)
+            if batch_idx is not None and total_batches is not None and total_batches > 0:
+                msg = f"Embedding batch {batch_idx}/{total_batches} — {current}/{total} chunks indexed..."
+            else:
+                msg = f"Embedding chunk {current}/{total}..."
+            progress_callback(msg, fraction)
 
+    t_embed_start = time.monotonic()
     try:
         embeddings = embedder.embed_chunks(chunks, progress_callback=embed_progress)
+        embedding_time_sec = time.monotonic() - t_embed_start
     except Exception as exc:
         logger.error("Failed to generate embeddings for document '%s': %s", doc_id, str(exc))
         raise
@@ -144,10 +167,12 @@ def run_indexing_pipeline(
     )
 
     # Step 5: Index Chunks with rollback on failure
+    t_vstore_start = time.monotonic()
     try:
         if progress_callback:
             progress_callback("Indexing chunks into ChromaDB...", 0.9)
         store.add_chunks(chunks=chunks, embeddings=embeddings)
+        vector_store_time_sec = time.monotonic() - t_vstore_start
     except Exception as exc:
         logger.error("Indexing failed for document '%s'; rolling back collection: %s", doc_id, str(exc))
         store.delete()
@@ -155,6 +180,9 @@ def run_indexing_pipeline(
 
     if progress_callback:
         progress_callback("Indexing complete!", 1.0)
+
+    total_indexing_time_sec = time.monotonic() - t_pipeline_start
+    stats = getattr(embedder, "stats", {})
 
     summary = IndexingResult(
         document_id=doc_id,
@@ -164,6 +192,14 @@ def run_indexing_pipeline(
         embedding_model=embedder.model_name,
         embedding_dimension=embedder.dimension,
         collection_name=store.collection_name,
+        extraction_time_sec=round(extraction_time_sec, 3) if extraction_time_sec is not None else None,
+        chunking_time_sec=round(chunking_time_sec, 3),
+        embedding_time_sec=round(embedding_time_sec, 3),
+        vector_store_time_sec=round(vector_store_time_sec, 3),
+        total_indexing_time_sec=round(total_indexing_time_sec, 3),
+        api_requests_count=stats.get("api_requests"),
+        bulk_batches_count=stats.get("bulk_batches"),
+        cache_hits_count=stats.get("cache_hits"),
     )
 
     logger.info("Successfully indexed document '%s': %d chunks into '%s'", doc_id, len(chunks), store.collection_name)

@@ -11,6 +11,7 @@ from typing import List, Optional, Callable, Dict, Any, Tuple, Union
 from dataclasses import dataclass
 from google import genai
 from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 
 from financial_report_analyzer.config import AppConfig, load_config
 from financial_report_analyzer.errors import ConfigurationError, EmbeddingError
@@ -334,13 +335,42 @@ def calculate_backoff_with_jitter(
     return random.uniform(low, high)
 
 
+class BatchContent(genai_types.Content):
+    """Duck-typed Content wrapper that preserves individual sub-requests in batchEmbedContents
+    while remaining backwards-compatible with string operations in mocks and test suites."""
+
+    def __init__(self, text: str, role: str = "user") -> None:
+        super().__init__(parts=[genai_types.Part.from_text(text=text)], role=role)
+        self._raw_text = text
+
+    def __len__(self) -> int:
+        return len(self._raw_text)
+
+    def __str__(self) -> str:
+        return self._raw_text
+
+    def __repr__(self) -> str:
+        return f"BatchContent({self._raw_text!r})"
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self._raw_text == other
+        if isinstance(other, BatchContent):
+            return self._raw_text == other._raw_text
+        return super().__eq__(other)
+
+    def lower(self) -> str:
+        return self._raw_text.lower()
+
+
 class TokenReservation:
     """Reservation handle for token and request quotas in the sliding window."""
 
-    def __init__(self, pacer: "TokenPacer", tokens: int, timestamp: float) -> None:
+    def __init__(self, pacer: "TokenPacer", tokens: int, timestamp: float, wait_sec: float = 0.0) -> None:
         self.pacer = pacer
         self.tokens = tokens
         self.timestamp = timestamp
+        self.wait_sec = wait_sec
         self._released = False
         self._finalized = False
 
@@ -470,7 +500,7 @@ class TokenPacer:
             self._prune(now)
             self._history.append((now, effective_tokens))
             self._last_req_time = now
-            return TokenReservation(self, effective_tokens, now)
+            return TokenReservation(self, effective_tokens, now, wait_sec=wait_sec)
 
     def acquire(self, tokens_needed: int = 1, estimated_tokens: Optional[int] = None) -> float:
         """Wait if necessary to stay within budget, then record token usage. Returns seconds waited."""
@@ -598,6 +628,22 @@ class EmbeddingService:
             else:
                 self._client = genai.Client(api_key=self.config.gemini_api_key)
 
+        # Telemetry statistics
+        self.stats: Dict[str, Any] = {
+            "effective_batch_size": self.batch_size,
+            "api_requests": 0,
+            "bulk_batches": 0,
+            "individual_requests": 0,
+            "vectors_generated": 0,
+            "cache_hits": 0,
+            "length_mismatches": 0,
+            "fallbacks_to_individual": 0,
+            "total_pacer_wait_sec": 0.0,
+            "total_api_latency_sec": 0.0,
+            "total_validation_sec": 0.0,
+            "batch_sizes": collections.Counter(),
+        }
+
     @property
     def is_configured(self) -> bool:
         """Check if client is ready with credentials."""
@@ -614,7 +660,7 @@ class EmbeddingService:
 
     def _call_embed_with_retry(
         self,
-        formatted_contents: Union[str, List[str]],
+        formatted_contents: Union[str, List[Any]],
         label: str,
         tokens_est: int = 100,
     ) -> List[List[float]]:
@@ -624,25 +670,46 @@ class EmbeddingService:
         start_time = time.monotonic()
         deadline_sec = getattr(self.config, "embedding_deadline_sec", 120.0)
 
+        # Ensure batch list items serialize as distinct sub-requests in batchEmbedContents
+        if isinstance(formatted_contents, list):
+            contents_to_send = [
+                c if isinstance(c, genai_types.Content) else BatchContent(str(c))
+                for c in formatted_contents
+            ]
+        else:
+            contents_to_send = formatted_contents
+
         # Reserve tokens before sending request
         reservation = self.pacer.reserve(tokens_est)
+        if hasattr(self, "stats"):
+            self.stats["total_pacer_wait_sec"] += getattr(reservation, "wait_sec", 0.0)
 
         while True:
             try:
+                t_api_start = time.monotonic()
                 response = client.models.embed_content(
                     model=self.model_name,
-                    contents=formatted_contents,
+                    contents=contents_to_send,
                     config={"output_dimensionality": self.dimension},
                 )
+                api_duration = time.monotonic() - t_api_start
+                if hasattr(self, "stats"):
+                    self.stats["total_api_latency_sec"] += api_duration
+                    self.stats["api_requests"] += 1
 
                 if not response or not response.embeddings:
                     raise EmbeddingError(f"Google GenAI returned empty embedding response for {label}")
 
+                t_val_start = time.monotonic()
                 vectors: List[List[float]] = []
                 for idx, emb_item in enumerate(response.embeddings):
                     vec = emb_item.values
                     validate_embedding_vector(vec, self.dimension, context_label=f"{label}[{idx}]")
                     vectors.append(list(vec))
+                val_duration = time.monotonic() - t_val_start
+                if hasattr(self, "stats"):
+                    self.stats["total_validation_sec"] += val_duration
+                    self.stats["vectors_generated"] += len(vectors)
 
                 reservation.finalize()
                 return vectors
@@ -757,7 +824,7 @@ class EmbeddingService:
     def embed_chunks(
         self,
         chunks: List[ChunkRecord],
-        progress_callback: Optional[Callable[[int, int], None]] = None,
+        progress_callback: Optional[Callable[..., None]] = None,
     ) -> List[List[float]]:
         """Embed document chunks with token pacing, partial progress preservation, and bulk batching."""
         if not chunks:
@@ -777,69 +844,85 @@ class EmbeddingService:
                 continue
             if i in hits:
                 c.embedding = hits[i]
+                if hasattr(self, "stats"):
+                    self.stats["cache_hits"] += 1
 
         already_ready = sum(1 for c in chunks if c.embedding is not None and len(c.embedding) == self.dimension)
         if already_ready > 0:
             logger.info("Embedding cache/memory hit: %d of %d chunks ready", already_ready, total)
 
         batch_size = max(1, self.batch_size)
-        MAX_BATCH_TOKENS = 12000  # Conservative safe ceiling well below 24,000 effective TPM
+        MAX_BATCH_TOKENS = 16000  # Conservative safe ceiling well below 24,000 effective TPM
 
-        idx = 0
-        while idx < total:
-            # Skip already embedded chunks
-            if chunks[idx].embedding is not None and len(chunks[idx].embedding) == self.dimension:
-                idx += 1
-                if progress_callback:
-                    try:
-                        progress_callback(idx, total)
-                    except Exception:
-                        pass
+        # Pre-plan batches for all un-embedded chunks
+        planned_batches: List[List[int]] = []
+        current_batch: List[int] = []
+        current_tokens = 0
+
+        for idx, c in enumerate(chunks):
+            if c.embedding is not None and len(c.embedding) == self.dimension:
                 continue
+            fmt = format_document_text(c.source_filename, c.text)
+            c_tok = estimate_conservative_tokens(fmt)
+            if current_batch and (len(current_batch) >= batch_size or current_tokens + c_tok > MAX_BATCH_TOKENS):
+                planned_batches.append(current_batch)
+                current_batch = [idx]
+                current_tokens = c_tok
+            else:
+                current_batch.append(idx)
+                current_tokens += c_tok
 
-            # Group up to batch_size consecutive un-embedded chunks without exceeding token ceiling
-            batch_chunks: List[ChunkRecord] = []
-            batch_keys: List[str] = []
-            batch_formatted: List[str] = []
-            batch_tokens = 0
+        if current_batch:
+            planned_batches.append(current_batch)
 
-            while idx < total and len(batch_chunks) < batch_size:
-                c = chunks[idx]
-                if c.embedding is not None and len(c.embedding) == self.dimension:
-                    break
-                fmt = format_document_text(c.source_filename, c.text)
-                c_tok = estimate_conservative_tokens(fmt)
-                if batch_chunks and (batch_tokens + c_tok > MAX_BATCH_TOKENS):
-                    break
-                batch_chunks.append(c)
-                batch_keys.append(cache_keys[idx])
-                batch_formatted.append(fmt)
-                batch_tokens += c_tok
-                idx += 1
+        total_batches = len(planned_batches)
 
-            if not batch_chunks:
-                continue
+        # If everything is already ready from memory/cache, trigger progress once
+        if total_batches == 0:
+            if progress_callback:
+                try:
+                    progress_callback(total, total, 1, 1)
+                except TypeError:
+                    progress_callback(total, total)
+            return [c.embedding for c in chunks if c.embedding is not None]
+
+        for batch_num, batch_indices in enumerate(planned_batches, start=1):
+            batch_chunks = [chunks[i] for i in batch_indices]
+            batch_keys = [cache_keys[i] for i in batch_indices]
+            batch_formatted = [format_document_text(c.source_filename, c.text) for c in batch_chunks]
+            batch_tokens = sum(estimate_conservative_tokens(fmt) for fmt in batch_formatted)
+
+            if hasattr(self, "stats"):
+                self.stats["batch_sizes"][len(batch_chunks)] += 1
 
             vectors: Optional[List[List[float]]] = None
             if len(batch_chunks) > 1:
+                if hasattr(self, "stats"):
+                    self.stats["bulk_batches"] += 1
                 try:
                     res_vectors = self._call_embed_with_retry(
                         batch_formatted,
-                        label=f"bulk batch ({len(batch_chunks)} chunks, ~{batch_tokens} tokens)",
+                        label=f"bulk batch {batch_num}/{total_batches} ({len(batch_chunks)} chunks, ~{batch_tokens} tokens)",
                         tokens_est=batch_tokens,
                     )
                     if len(res_vectors) == len(batch_chunks):
                         vectors = res_vectors
                     else:
+                        if hasattr(self, "stats"):
+                            self.stats["length_mismatches"] += 1
+                            self.stats["fallbacks_to_individual"] += 1
                         logger.warning(
                             "Bulk embedding returned %d vectors for %d chunks; falling back to 1-by-1 embedding.",
                             len(res_vectors),
                             len(batch_chunks),
                         )
                 except Exception as exc:
+                    if hasattr(self, "stats"):
+                        self.stats["fallbacks_to_individual"] += 1
                     logger.warning(
-                        "Bulk embedding failed for batch starting at chunk %d (%s); falling back to 1-by-1 embedding.",
-                        idx - len(batch_chunks),
+                        "Bulk embedding failed for batch %d/%d (%s); falling back to 1-by-1 embedding.",
+                        batch_num,
+                        total_batches,
                         str(exc),
                     )
 
@@ -851,14 +934,23 @@ class EmbeddingService:
                 GLOBAL_CACHE.put_embeddings_bulk(pairs_to_cache)
             else:
                 # 1-by-1 embedding fallback (or single item batch)
+                if len(batch_chunks) == 1 and hasattr(self, "stats"):
+                    self.stats["individual_requests"] += 1
+                elif len(batch_chunks) > 1 and hasattr(self, "stats"):
+                    self.stats["individual_requests"] += len(batch_chunks)
+
                 for b_i, b_chunk in enumerate(batch_chunks):
                     vec = self.embed_chunk(b_chunk.text, b_chunk.source_filename)
                     b_chunk.embedding = vec
 
             if progress_callback:
+                confirmed = sum(1 for c in chunks if c.embedding is not None and len(c.embedding) == self.dimension)
                 try:
-                    progress_callback(idx, total)
-                except Exception:
-                    pass
+                    progress_callback(confirmed, total, batch_num, total_batches)
+                except TypeError:
+                    try:
+                        progress_callback(confirmed, total)
+                    except Exception:
+                        pass
 
         return [c.embedding for c in chunks if c.embedding is not None]

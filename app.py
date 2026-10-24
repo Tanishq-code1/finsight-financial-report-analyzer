@@ -611,6 +611,7 @@ def main() -> None:
 
             try:
                 # Step 1: PDF Extraction
+                t_ext_start = time.monotonic()
                 status_text.text("1/3: Extracting text page-by-page...")
                 progress_bar.progress(0.2)
                 result = load_pdf(
@@ -618,6 +619,7 @@ def main() -> None:
                     filename=uploaded_file.name,
                     config=config,
                 )
+                t_ext = time.monotonic() - t_ext_start
                 st.session_state.document_id = result.metadata.document_id
                 st.session_state.report_metadata = result.metadata
                 st.session_state.page_records = result.pages
@@ -646,6 +648,7 @@ def main() -> None:
                         chunks=chunks,
                         config=config,
                         progress_callback=update_progress,
+                        extraction_time_sec=t_ext,
                     )
                     st.session_state.vector_store = pipeline_output.vector_store
                     st.session_state.indexing_result = pipeline_output.indexing_result
@@ -658,6 +661,20 @@ def main() -> None:
                         f"Indexed {result.metadata.total_pages} pages ({len(chunks)} chunks, "
                         f"{pipeline_output.indexing_result.embedding_dimension}D vectors)!"
                     )
+                    if pipeline_output.indexing_result.embedding_time_sec is not None:
+                        idx_res = pipeline_output.indexing_result
+                        t_e_val = idx_res.extraction_time_sec or 0.0
+                        t_c_val = idx_res.chunking_time_sec or 0.0
+                        t_emb_val = idx_res.embedding_time_sec or 0.0
+                        t_v_val = idx_res.vector_store_time_sec or 0.0
+                        t_tot_val = idx_res.total_indexing_time_sec or (t_e_val + t_c_val + t_emb_val + t_v_val)
+                        reqs_val = idx_res.api_requests_count or 0
+                        batches_val = idx_res.bulk_batches_count or 0
+                        st.info(
+                            f"⏱️ **Stage Timings:** Extraction: {t_e_val:.2f}s | Chunking: {t_c_val:.2f}s | "
+                            f"Embeddings ({reqs_val} API requests, {batches_val} bulk batches): {t_emb_val:.2f}s | "
+                            f"ChromaDB: {t_v_val:.2f}s | Total: {t_tot_val:.2f}s"
+                        )
                 else:
                     st.session_state.is_indexed = False
                     progress_bar.progress(1.0)
@@ -1578,6 +1595,26 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
 
+            if indexing and indexing.embedding_time_sec is not None:
+                t_ext_d = indexing.extraction_time_sec or 0.0
+                t_chk_d = indexing.chunking_time_sec or 0.0
+                t_emb_d = indexing.embedding_time_sec or 0.0
+                t_vec_d = indexing.vector_store_time_sec or 0.0
+                t_tot_d = indexing.total_indexing_time_sec or (t_ext_d + t_chk_d + t_emb_d + t_vec_d)
+                req_d = indexing.api_requests_count or 0
+                bulk_d = indexing.bulk_batches_count or 0
+                cache_d = indexing.cache_hits_count or 0
+                st.markdown(
+                    f"""
+                    <div class="metric-card" style="margin-top: 0.5rem;">
+                        <h5>Ingestion & Bulk Embedding Telemetry</h5>
+                        <p>Total Pipeline Time: <strong>{t_tot_d:.2f}s</strong> (Extraction: <strong>{t_ext_d:.2f}s</strong> | Chunking: <strong>{t_chk_d:.2f}s</strong> | Embeddings: <strong>{t_emb_d:.2f}s</strong> | ChromaDB: <strong>{t_vec_d:.2f}s</strong>)</p>
+                        <p>Embedding API Requests: <strong>{req_d}</strong> | Bulk Batches: <strong>{bulk_d}</strong> | Cache Hits: <strong>{cache_d}</strong></p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
             if st.session_state.indexing_error and not st.session_state.is_indexed:
                 st.warning(f"**Indexing Status Notice:** {st.session_state.indexing_error}")
 
@@ -1738,7 +1775,7 @@ def main() -> None:
                 <div class="kpi-metric-box">
                     <div class="kpi-title">Batching & Routing Pipeline</div>
                     <div style="font-size: 0.95rem; font-weight: 600; color: #F8FAFC; margin-top: 0.25rem;">
-                        Bulk Embedding: <strong>{bulk_batch} chunks/req</strong><br/>
+                        Bulk Embedding: <strong>{bulk_batch} chunks/req (Verified 1:1)</strong><br/>
                         Section Routing: <strong>{sec_routing}</strong><br/>
                         Index Coverage: <strong>100% of Document Pages</strong>
                     </div>

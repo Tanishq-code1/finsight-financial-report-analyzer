@@ -246,7 +246,11 @@ def load_config() -> AppConfig:
         embedding_max_backoff_sec = 60.0
 
     try:
-        embedding_batch_size = max(1, min(50, int(_get_setting("EMBEDDING_BATCH_SIZE", "16"))))
+        bs_setting = _get_setting("EMBEDDING_BATCH_SIZE", "16")
+        parsed_bs = int(bs_setting) if bs_setting is not None else 16
+        if parsed_bs < 16 and "EMBEDDING_BATCH_SIZE" not in os.environ:
+            parsed_bs = 16
+        embedding_batch_size = max(1, min(50, parsed_bs))
     except ValueError:
         embedding_batch_size = 16
 
